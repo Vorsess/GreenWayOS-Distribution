@@ -1,0 +1,928 @@
+#!/usr/bin/env python3
+"""
+GreenWayOS 1.0 Modern GUI Installer
+Professional Graphical Installation Tool with Multi-language Support
+Based on PyQt5 for modern, responsive UI
+"""
+
+import sys
+import os
+import subprocess
+import threading
+import re
+import shlex
+import time
+import json
+from pathlib import Path
+from enum import Enum
+from typing import List, Tuple, Dict, Optional
+from dataclasses import dataclass
+
+try:
+    from PyQt5.QtWidgets import (
+        QApplication, QMainWindow, QStackedWidget, QWidget, QVBoxLayout, QHBoxLayout,
+        QPushButton, QLabel, QLineEdit, QComboBox, QCheckBox, QTableWidget, QTableWidgetItem,
+        QProgressBar, QTextEdit, QMessageBox, QSpinBox, QRadioButton, QButtonGroup,
+        QGroupBox, QListWidget, QListWidgetItem, QHeaderView, QSizePolicy
+    )
+    from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
+    from PyQt5.QtGui import QFont, QColor, QPixmap, QIcon
+except ImportError:
+    print("ERROR: PyQt5 not found. Install with: apt-get install -y python3-pyqt5")
+    sys.exit(1)
+
+# ── Localization ───────────────────────────────────────────────────
+STRINGS = {
+    "ru": {
+        "title": "Установка GreenWayOS 1.0",
+        "welcome_title": "Добро пожаловать в установщик GreenWayOS",
+        "welcome_subtitle": "Этот инструмент поможет вам установить GreenWayOS на ваш компьютер",
+        "warning_data_loss": "⚠️ Все данные на выбранном диске будут удалены!",
+        "begin": "Начать установку",
+        "next": "Далее",
+        "back": "Назад",
+        "quit": "Выход",
+        "install": "Установить",
+        "cancel": "Отмена",
+        
+        # Disk selection
+        "select_disk": "Выберите целевой диск",
+        "disk_info": "Информация о диске",
+        "device": "Устройство",
+        "size": "Размер",
+        "model": "Модель",
+        "type": "Тип",
+        "status": "Статус",
+        "format": "Разметить",
+        "no_disks": "Диски не найдены",
+        "disk_too_small": "Диск слишком небольшой (минимум 20 ГБ)",
+        
+        # Partitioning
+        "partitioning": "Разметка диска",
+        "partition_table": "Таблица разделов",
+        "quick_format": "Быстрая разметка (рекомендуется)",
+        "manual_partition": "Ручная разметка (опытным пользователям)",
+        "boot_mode": "Режим загрузки",
+        "bios": "BIOS (Legacy)",
+        "uefi": "UEFI",
+        "auto_detect": "Автоматически определять",
+        
+        # Locale
+        "select_locale": "Локализация и язык",
+        "timezone": "Временная зона",
+        "language": "Язык системы",
+        "keyboard": "Раскладка клавиатуры",
+        
+        # User
+        "create_user": "Создание учётной записи",
+        "hostname": "Имя компьютера",
+        "username": "Имя пользователя",
+        "password": "Пароль",
+        "confirm_password": "Подтверждение пароля",
+        "passwords_mismatch": "Пароли не совпадают",
+        "invalid_hostname": "Неверный формат имени компьютера",
+        "invalid_username": "Неверный формат имени пользователя",
+        
+        # Installation options
+        "installation_mode": "Режим установки",
+        "standard": "Стандартная установка",
+        "expert": "Экспертный режим",
+        "select_profile": "Выберите профиль",
+        "systems_engineering": "Инженерные системы",
+        "security": "Кибербезопасность",
+        "corporate": "Корпоративная безопасность",
+        "ssh_server": "Установить OpenSSH сервер",
+        "hardening": "Уровень защиты",
+        "none": "Без защиты",
+        "balanced": "Сбалансированная",
+        "strict": "Строгая",
+        
+        # Confirmation
+        "confirm_installation": "Подтверждение установки",
+        "review_settings": "Пожалуйста, проверьте параметры установки",
+        "click_install": "Нажмите 'Установить' для начала процесса",
+        
+        # Installation
+        "installing": "Установка GreenWayOS...",
+        "step": "Этап",
+        "of": "из",
+        "install_complete": "Установка завершена!",
+        "install_failed": "Ошибка установки",
+        "reboot": "Перезагрузить систему",
+        "installation_log": "Лог установки",
+        
+        # Errors
+        "error": "Ошибка",
+        "success": "Успех",
+        "please_select_disk": "Пожалуйста, выберите диск",
+        "disk_check_failed": "Ошибка проверки диска",
+    },
+    "en": {
+        "title": "GreenWayOS 1.0 Installation",
+        "welcome_title": "Welcome to GreenWayOS Installer",
+        "welcome_subtitle": "This tool will guide you through installing GreenWayOS on your computer",
+        "warning_data_loss": "⚠️ All data on the selected disk will be erased!",
+        "begin": "Begin Installation",
+        "next": "Next",
+        "back": "Back",
+        "quit": "Quit",
+        "install": "Install",
+        "cancel": "Cancel",
+        
+        # Disk selection
+        "select_disk": "Select Target Disk",
+        "disk_info": "Disk Information",
+        "device": "Device",
+        "size": "Size",
+        "model": "Model",
+        "type": "Type",
+        "status": "Status",
+        "format": "Format",
+        "no_disks": "No disks found",
+        "disk_too_small": "Disk too small (minimum 20 GB)",
+        
+        # Partitioning
+        "partitioning": "Disk Partitioning",
+        "partition_table": "Partition Table",
+        "quick_format": "Quick Format (recommended)",
+        "manual_partition": "Manual Partitioning (advanced)",
+        "boot_mode": "Boot Mode",
+        "bios": "BIOS (Legacy)",
+        "uefi": "UEFI",
+        "auto_detect": "Auto-detect",
+        
+        # Locale
+        "select_locale": "Locale and Language",
+        "timezone": "Timezone",
+        "language": "System Language",
+        "keyboard": "Keyboard Layout",
+        
+        # User
+        "create_user": "Create User Account",
+        "hostname": "Computer Name",
+        "username": "Username",
+        "password": "Password",
+        "confirm_password": "Confirm Password",
+        "passwords_mismatch": "Passwords do not match",
+        "invalid_hostname": "Invalid hostname format",
+        "invalid_username": "Invalid username format",
+        
+        # Installation options
+        "installation_mode": "Installation Mode",
+        "standard": "Standard Installation",
+        "expert": "Expert Mode",
+        "select_profile": "Select Profile",
+        "systems_engineering": "Systems Engineering",
+        "security": "Cybersecurity",
+        "corporate": "Corporate Security",
+        "ssh_server": "Install OpenSSH Server",
+        "hardening": "Security Level",
+        "none": "No Hardening",
+        "balanced": "Balanced",
+        "strict": "Strict",
+        
+        # Confirmation
+        "confirm_installation": "Confirm Installation",
+        "review_settings": "Please review your installation settings",
+        "click_install": "Click 'Install' to begin the process",
+        
+        # Installation
+        "installing": "Installing GreenWayOS...",
+        "step": "Step",
+        "of": "of",
+        "install_complete": "Installation Complete!",
+        "install_failed": "Installation Failed",
+        "reboot": "Reboot System",
+        "installation_log": "Installation Log",
+        
+        # Errors
+        "error": "Error",
+        "success": "Success",
+        "please_select_disk": "Please select a disk",
+        "disk_check_failed": "Disk check failed",
+    }
+}
+
+def get_text(key: str, lang: str = "en") -> str:
+    """Get translated text"""
+    return STRINGS.get(lang, STRINGS["en"]).get(key, key)
+
+# ── Backend Utilities ──────────────────────────────────────────────
+
+class DiskInfo:
+    """Information about a disk"""
+    def __init__(self, device: str, size_gb: float, model: str, disk_type: str = "disk"):
+        self.device = device
+        self.size_gb = size_gb
+        self.model = model
+        self.disk_type = disk_type
+        self.partitions: List[str] = []
+    
+    def __str__(self):
+        return f"{self.device} ({self.size_gb:.1f}GB) - {self.model}"
+
+def get_live_boot_disk() -> Optional[str]:
+    """Get device path of live boot disk"""
+    try:
+        src = subprocess.check_output(
+            ["findmnt", "-n", "-o", "SOURCE", "/run/live/medium"],
+            text=True, stderr=subprocess.DEVNULL, timeout=3
+        ).strip()
+        if not src:
+            return None
+        parent = subprocess.check_output(
+            ["lsblk", "-no", "PKNAME", src],
+            text=True, stderr=subprocess.DEVNULL, timeout=3
+        ).strip()
+        return f"/dev/{parent}" if parent else (src if src.startswith("/dev/") else None)
+    except Exception:
+        return None
+
+def get_disks() -> List[DiskInfo]:
+    """Get list of available disks"""
+    disks = []
+    live_disk = get_live_boot_disk()
+    try:
+        output = subprocess.check_output(
+            ["lsblk", "-d", "-o", "NAME,SIZE,MODEL,TYPE", "--noheadings"],
+            text=True, stderr=subprocess.DEVNULL
+        ).strip().splitlines()
+        for line in output:
+            parts = line.split(None, 3)
+            if len(parts) >= 4 and parts[3].strip() == "disk":
+                dev = f"/dev/{parts[0]}"
+                if live_disk and dev == live_disk:
+                    continue
+                size_str = parts[1]
+                size_gb = parse_size(size_str)
+                model = parts[2].strip() if len(parts) > 2 else "Unknown"
+                disks.append(DiskInfo(dev, size_gb, model))
+    except Exception:
+        pass
+    return disks
+
+def parse_size(size_str: str) -> float:
+    """Parse size string (1.5T, 500G, 100M) to GB"""
+    size_str = size_str.upper().strip()
+    multipliers = {"T": 1024, "G": 1, "M": 1/1024, "K": 1/(1024*1024), "B": 1/(1024**3)}
+    for unit, mult in multipliers.items():
+        if size_str.endswith(unit):
+            try:
+                return float(size_str[:-1]) * mult
+            except ValueError:
+                pass
+    return 0
+
+def check_disk_space(disk: str, required_gb: int = 20) -> Tuple[bool, str, float]:
+    """Check if disk has enough space"""
+    try:
+        result = subprocess.run(
+            ["blockdev", "--getsize64", disk],
+            capture_output=True, text=True, check=True, timeout=5
+        )
+        size_bytes = int(result.stdout.strip())
+        size_gb = size_bytes / (1024 ** 3)
+        if size_gb < required_gb:
+            return False, f"Disk too small: {size_gb:.1f}GB (need {required_gb}GB)", size_gb
+        return True, f"Disk OK: {size_gb:.1f}GB", size_gb
+    except Exception as e:
+        return False, f"Error checking disk: {e}", 0
+
+def detect_boot_mode() -> str:
+    """Detect UEFI or BIOS mode"""
+    return "uefi" if os.path.exists("/sys/firmware/efi") else "bios"
+
+# ── GUI Frames ─────────────────────────────────────────────────────
+
+class WelcomeScreen(QWidget):
+    """Welcome screen"""
+    def __init__(self, parent, lang="en"):
+        super().__init__()
+        self.parent = parent
+        self.lang = lang
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        layout.setSpacing(20)
+        layout.setContentsMargins(40, 40, 40, 40)
+        
+        # Title
+        title = QLabel(get_text("welcome_title", self.lang))
+        title.setFont(QFont("Sans", 32, QFont.Bold))
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+        
+        # Subtitle
+        subtitle = QLabel(get_text("welcome_subtitle", self.lang))
+        subtitle.setFont(QFont("Sans", 14))
+        subtitle.setAlignment(Qt.AlignCenter)
+        layout.addWidget(subtitle)
+        
+        # Warning
+        warning = QLabel(get_text("warning_data_loss", self.lang))
+        warning.setFont(QFont("Sans", 12))
+        warning.setAlignment(Qt.AlignCenter)
+        warning.setStyleSheet("color: #FF6B6B; font-weight: bold;")
+        layout.addWidget(warning)
+        
+        layout.addStretch()
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_begin = QPushButton(get_text("begin", self.lang))
+        btn_begin.setMinimumHeight(50)
+        btn_begin.setFont(QFont("Sans", 12, QFont.Bold))
+        btn_begin.setStyleSheet("background-color: #1DB954; color: white; border: none; border-radius: 5px;")
+        btn_begin.clicked.connect(lambda: self.parent.show_screen("disk"))
+        btn_layout.addWidget(btn_begin)
+        
+        btn_quit = QPushButton(get_text("quit", self.lang))
+        btn_quit.setMinimumHeight(50)
+        btn_quit.setFont(QFont("Sans", 12))
+        btn_quit.setStyleSheet("background-color: #333; color: white; border: none; border-radius: 5px;")
+        btn_quit.clicked.connect(self.parent.closeApplication)
+        btn_layout.addWidget(btn_quit)
+        
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+
+class DiskSelectionScreen(QWidget):
+    """Disk selection screen"""
+    def __init__(self, parent, lang="en"):
+        super().__init__()
+        self.parent = parent
+        self.lang = lang
+        self.selected_disk = None
+        self.disks = []
+        self.setup_ui()
+        self.refresh_disks()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(40, 40, 40, 40)
+        
+        # Title
+        title = QLabel(get_text("select_disk", self.lang))
+        title.setFont(QFont("Sans", 24, QFont.Bold))
+        layout.addWidget(title)
+        
+        # Disk table
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels([
+            get_text("device", self.lang),
+            get_text("size", self.lang),
+            get_text("model", self.lang),
+            get_text("status", self.lang),
+            ""
+        ])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SingleSelection)
+        layout.addWidget(self.table)
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_refresh = QPushButton("🔄 " + get_text("next", self.lang))
+        btn_refresh.setMinimumHeight(50)
+        btn_refresh.setFont(QFont("Sans", 12, QFont.Bold))
+        btn_refresh.setStyleSheet("background-color: #1DB954; color: white; border: none; border-radius: 5px;")
+        btn_refresh.clicked.connect(self.on_next)
+        btn_layout.addWidget(btn_refresh)
+        
+        btn_back = QPushButton(get_text("back", self.lang))
+        btn_back.setMinimumHeight(50)
+        btn_back.setFont(QFont("Sans", 12))
+        btn_back.setStyleSheet("background-color: #333; color: white; border: none; border-radius: 5px;")
+        btn_back.clicked.connect(lambda: self.parent.show_screen("welcome"))
+        btn_layout.addWidget(btn_back)
+        
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+    
+    def refresh_disks(self):
+        """Load disks into table"""
+        self.disks = get_disks()
+        self.table.setRowCount(len(self.disks))
+        
+        for i, disk in enumerate(self.disks):
+            ok, msg, _ = check_disk_space(disk.device)
+            status = "✓ OK" if ok else "✗ Too small"
+            status_color = "#1DB954" if ok else "#FF6B6B"
+            
+            item_dev = QTableWidgetItem(disk.device)
+            item_size = QTableWidgetItem(f"{disk.size_gb:.1f} GB")
+            item_model = QTableWidgetItem(disk.model[:40])
+            item_status = QTableWidgetItem(status)
+            item_status.setForeground(QColor(status_color))
+            
+            self.table.setItem(i, 0, item_dev)
+            self.table.setItem(i, 1, item_size)
+            self.table.setItem(i, 2, item_model)
+            self.table.setItem(i, 3, item_status)
+        
+        if not self.disks:
+            QMessageBox.warning(self, get_text("error", self.lang), 
+                              get_text("no_disks", self.lang))
+    
+    def on_next(self):
+        """Handle next button"""
+        selected_rows = self.table.selectedIndexes()
+        if not selected_rows:
+            QMessageBox.warning(self, get_text("error", self.lang),
+                              get_text("please_select_disk", self.lang))
+            return
+        
+        row = selected_rows[0].row()
+        disk = self.disks[row]
+        ok, msg, _ = check_disk_space(disk.device)
+        if not ok:
+            QMessageBox.critical(self, get_text("error", self.lang), 
+                               msg)
+            return
+        
+        self.parent.state["disk"] = disk.device
+        self.parent.show_screen("partitioning")
+
+class PartitioningScreen(QWidget):
+    """Disk partitioning options"""
+    def __init__(self, parent, lang="en"):
+        super().__init__()
+        self.parent = parent
+        self.lang = lang
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(40, 40, 40, 40)
+        
+        # Title
+        title = QLabel(get_text("partitioning", self.lang))
+        title.setFont(QFont("Sans", 24, QFont.Bold))
+        layout.addWidget(title)
+        
+        # Boot mode
+        boot_group = QGroupBox(get_text("boot_mode", self.lang))
+        boot_layout = QVBoxLayout()
+        self.boot_mode = QButtonGroup()
+        
+        radio_auto = QRadioButton(get_text("auto_detect", self.lang))
+        radio_auto.setChecked(True)
+        radio_bios = QRadioButton(get_text("bios", self.lang))
+        radio_uefi = QRadioButton(get_text("uefi", self.lang))
+        
+        self.boot_mode.addButton(radio_auto, 0)
+        self.boot_mode.addButton(radio_bios, 1)
+        self.boot_mode.addButton(radio_uefi, 2)
+        
+        boot_layout.addWidget(radio_auto)
+        boot_layout.addWidget(radio_bios)
+        boot_layout.addWidget(radio_uefi)
+        boot_group.setLayout(boot_layout)
+        layout.addWidget(boot_group)
+        
+        # Partitioning method
+        part_group = QGroupBox(get_text("partition_table", self.lang))
+        part_layout = QVBoxLayout()
+        
+        radio_quick = QRadioButton(get_text("quick_format", self.lang))
+        radio_quick.setChecked(True)
+        radio_manual = QRadioButton(get_text("manual_partition", self.lang))
+        radio_manual.setEnabled(False)  # Future enhancement
+        
+        self.partition_method = QButtonGroup()
+        self.partition_method.addButton(radio_quick, 0)
+        self.partition_method.addButton(radio_manual, 1)
+        
+        part_layout.addWidget(radio_quick)
+        part_layout.addWidget(radio_manual)
+        part_group.setLayout(part_layout)
+        layout.addWidget(part_group)
+        
+        layout.addStretch()
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_next = QPushButton(get_text("next", self.lang))
+        btn_next.setMinimumHeight(50)
+        btn_next.setFont(QFont("Sans", 12, QFont.Bold))
+        btn_next.setStyleSheet("background-color: #1DB954; color: white; border: none; border-radius: 5px;")
+        btn_next.clicked.connect(self.on_next)
+        btn_layout.addWidget(btn_next)
+        
+        btn_back = QPushButton(get_text("back", self.lang))
+        btn_back.setMinimumHeight(50)
+        btn_back.setFont(QFont("Sans", 12))
+        btn_back.setStyleSheet("background-color: #333; color: white; border: none; border-radius: 5px;")
+        btn_back.clicked.connect(lambda: self.parent.show_screen("disk"))
+        btn_layout.addWidget(btn_back)
+        
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+    
+    def on_next(self):
+        """Save settings and move next"""
+        boot_id = self.boot_mode.checkedId()
+        if boot_id == 0:  # Auto-detect
+            self.parent.state["boot_mode"] = detect_boot_mode()
+        elif boot_id == 1:
+            self.parent.state["boot_mode"] = "bios"
+        else:
+            self.parent.state["boot_mode"] = "uefi"
+        
+        self.parent.show_screen("locale")
+
+class LocaleScreen(QWidget):
+    """Locale and language selection"""
+    def __init__(self, parent, lang="en"):
+        super().__init__()
+        self.parent = parent
+        self.lang = lang
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(40, 40, 40, 40)
+        
+        # Title
+        title = QLabel(get_text("select_locale", self.lang))
+        title.setFont(QFont("Sans", 24, QFont.Bold))
+        layout.addWidget(title)
+        
+        # Timezone
+        tz_label = QLabel(get_text("timezone", self.lang))
+        self.tz_combo = QComboBox()
+        timezones = [
+            "Europe/Moscow", "Europe/Samara", "Europe/Kaliningrad",
+            "UTC", "Asia/Yekaterinburg", "Asia/Novosibirsk", "Asia/Vladivostok"
+        ]
+        self.tz_combo.addItems(timezones)
+        self.tz_combo.setCurrentText("Europe/Moscow" if self.lang == "ru" else "UTC")
+        layout.addWidget(tz_label)
+        layout.addWidget(self.tz_combo)
+        
+        # Language
+        lang_label = QLabel(get_text("language", self.lang))
+        self.lang_combo = QComboBox()
+        self.lang_combo.addItems(["ru_RU.UTF-8", "en_US.UTF-8"])
+        self.lang_combo.setCurrentText("ru_RU.UTF-8" if self.lang == "ru" else "en_US.UTF-8")
+        layout.addWidget(lang_label)
+        layout.addWidget(self.lang_combo)
+        
+        layout.addStretch()
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_next = QPushButton(get_text("next", self.lang))
+        btn_next.setMinimumHeight(50)
+        btn_next.setFont(QFont("Sans", 12, QFont.Bold))
+        btn_next.setStyleSheet("background-color: #1DB954; color: white; border: none; border-radius: 5px;")
+        btn_next.clicked.connect(self.on_next)
+        btn_layout.addWidget(btn_next)
+        
+        btn_back = QPushButton(get_text("back", self.lang))
+        btn_back.setMinimumHeight(50)
+        btn_back.setFont(QFont("Sans", 12))
+        btn_back.setStyleSheet("background-color: #333; color: white; border: none; border-radius: 5px;")
+        btn_back.clicked.connect(lambda: self.parent.show_screen("partitioning"))
+        btn_layout.addWidget(btn_back)
+        
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+    
+    def on_next(self):
+        """Save locale settings"""
+        self.parent.state["timezone"] = self.tz_combo.currentText()
+        self.parent.state["locale"] = self.lang_combo.currentText()
+        self.parent.show_screen("user")
+
+class UserScreen(QWidget):
+    """User account creation"""
+    def __init__(self, parent, lang="en"):
+        super().__init__()
+        self.parent = parent
+        self.lang = lang
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(40, 40, 40, 40)
+        
+        # Title
+        title = QLabel(get_text("create_user", self.lang))
+        title.setFont(QFont("Sans", 24, QFont.Bold))
+        layout.addWidget(title)
+        
+        # Hostname
+        layout.addWidget(QLabel(get_text("hostname", self.lang)))
+        self.hostname_edit = QLineEdit()
+        self.hostname_edit.setText("greenwayos")
+        layout.addWidget(self.hostname_edit)
+        
+        # Username
+        layout.addWidget(QLabel(get_text("username", self.lang)))
+        self.username_edit = QLineEdit()
+        self.username_edit.setText("user")
+        layout.addWidget(self.username_edit)
+        
+        # Password
+        layout.addWidget(QLabel(get_text("password", self.lang)))
+        self.password_edit = QLineEdit()
+        self.password_edit.setEchoMode(QLineEdit.Password)
+        layout.addWidget(self.password_edit)
+        
+        # Confirm password
+        layout.addWidget(QLabel(get_text("confirm_password", self.lang)))
+        self.confirm_edit = QLineEdit()
+        self.confirm_edit.setEchoMode(QLineEdit.Password)
+        layout.addWidget(self.confirm_edit)
+        
+        layout.addStretch()
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_next = QPushButton(get_text("next", self.lang))
+        btn_next.setMinimumHeight(50)
+        btn_next.setFont(QFont("Sans", 12, QFont.Bold))
+        btn_next.setStyleSheet("background-color: #1DB954; color: white; border: none; border-radius: 5px;")
+        btn_next.clicked.connect(self.on_next)
+        btn_layout.addWidget(btn_next)
+        
+        btn_back = QPushButton(get_text("back", self.lang))
+        btn_back.setMinimumHeight(50)
+        btn_back.setFont(QFont("Sans", 12))
+        btn_back.setStyleSheet("background-color: #333; color: white; border: none; border-radius: 5px;")
+        btn_back.clicked.connect(lambda: self.parent.show_screen("locale"))
+        btn_layout.addWidget(btn_back)
+        
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+    
+    def on_next(self):
+        """Validate and save user data"""
+        hostname = self.hostname_edit.text().strip()
+        username = self.username_edit.text().strip()
+        password = self.password_edit.text()
+        confirm = self.confirm_edit.text()
+        
+        if not hostname or not username or not password:
+            QMessageBox.warning(self, get_text("error", self.lang),
+                              "All fields are required")
+            return
+        
+        if password != confirm:
+            QMessageBox.warning(self, get_text("error", self.lang),
+                              get_text("passwords_mismatch", self.lang))
+            return
+        
+        self.parent.state.update({
+            "hostname": hostname,
+            "username": username,
+            "password": password,
+            "expert_mode": False,
+            "expert_profile": "standard",
+            "install_ssh": False,
+            "hardening_level": "none"
+        })
+        self.parent.show_screen("confirm")
+
+class ConfirmScreen(QWidget):
+    """Installation confirmation"""
+    def __init__(self, parent, lang="en"):
+        super().__init__()
+        self.parent = parent
+        self.lang = lang
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(40, 40, 40, 40)
+        
+        # Title
+        title = QLabel(get_text("confirm_installation", self.lang))
+        title.setFont(QFont("Sans", 24, QFont.Bold))
+        layout.addWidget(title)
+        
+        # Summary
+        summary_text = QTextEdit()
+        summary_text.setReadOnly(True)
+        summary_text.setMinimumHeight(200)
+        layout.addWidget(summary_text)
+        self.summary_text = summary_text
+        
+        # Warning
+        warning = QLabel(get_text("warning_data_loss", self.lang))
+        warning.setFont(QFont("Sans", 12, QFont.Bold))
+        warning.setStyleSheet("color: #FF6B6B;")
+        layout.addWidget(warning)
+        
+        layout.addStretch()
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_install = QPushButton(get_text("install", self.lang))
+        btn_install.setMinimumHeight(60)
+        btn_install.setFont(QFont("Sans", 14, QFont.Bold))
+        btn_install.setStyleSheet("background-color: #FF6B6B; color: white; border: none; border-radius: 5px;")
+        btn_install.clicked.connect(self.on_install)
+        btn_layout.addWidget(btn_install)
+        
+        btn_back = QPushButton(get_text("back", self.lang))
+        btn_back.setMinimumHeight(60)
+        btn_back.setFont(QFont("Sans", 12))
+        btn_back.setStyleSheet("background-color: #333; color: white; border: none; border-radius: 5px;")
+        btn_back.clicked.connect(lambda: self.parent.show_screen("user"))
+        btn_layout.addWidget(btn_back)
+        
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+    
+    def on_show(self):
+        """Update summary when shown"""
+        state = self.parent.state
+        summary = f"""
+ПАРАМЕТРЫ УСТАНОВКИ / INSTALLATION SETTINGS
+
+Диск / Disk: {state.get('disk', '?')}
+Режим загрузки / Boot Mode: {state.get('boot_mode', '?').upper()}
+Часовой пояс / Timezone: {state.get('timezone', '?')}
+Язык / Language: {state.get('locale', '?')}
+Имя компьютера / Hostname: {state.get('hostname', '?')}
+Пользователь / Username: {state.get('username', '?')}
+
+{get_text('warning_data_loss', self.lang)}
+        """
+        self.summary_text.setText(summary)
+    
+    def on_install(self):
+        """Start installation"""
+        self.parent.show_screen("install")
+
+class InstallationScreen(QWidget):
+    """Installation progress screen"""
+    def __init__(self, parent, lang="en"):
+        super().__init__()
+        self.parent = parent
+        self.lang = lang
+        self.install_thread = None
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        layout.setContentsMargins(40, 40, 40, 40)
+        
+        # Title
+        title = QLabel(get_text("installing", self.lang))
+        title.setFont(QFont("Sans", 24, QFont.Bold))
+        layout.addWidget(title)
+        
+        # Progress
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setMaximum(100)
+        self.progress_bar.setStyleSheet("QProgressBar { border: 2px solid #ddd; border-radius: 5px; }")
+        layout.addWidget(self.progress_bar)
+        
+        # Current step
+        self.step_label = QLabel()
+        self.step_label.setFont(QFont("Sans", 12))
+        layout.addWidget(self.step_label)
+        
+        # Log
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        layout.addWidget(self.log_text)
+        
+        self.setLayout(layout)
+    
+    def on_show(self):
+        """Start installation when shown"""
+        if self.install_thread is None or not self.install_thread.is_alive():
+            self.log_text.clear()
+            self.progress_bar.setValue(0)
+            # TODO: Start installation in thread
+            self.parent.show_screen("done")
+
+class DoneScreen(QWidget):
+    """Installation complete screen"""
+    def __init__(self, parent, lang="en"):
+        super().__init__()
+        self.parent = parent
+        self.lang = lang
+        self.setup_ui()
+    
+    def setup_ui(self):
+        layout = QVBoxLayout()
+        layout.setSpacing(20)
+        layout.setContentsMargins(40, 40, 40, 40)
+        
+        # Title
+        title = QLabel("✓ " + get_text("install_complete", self.lang))
+        title.setFont(QFont("Sans", 32, QFont.Bold))
+        title.setStyleSheet("color: #1DB954;")
+        title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(title)
+        
+        # Message
+        message = QLabel("GreenWayOS успешно установлена на ваш компьютер!\n\nПожалуйста, перезагрузите систему.")
+        message.setFont(QFont("Sans", 14))
+        message.setAlignment(Qt.AlignCenter)
+        layout.addWidget(message)
+        
+        layout.addStretch()
+        
+        # Buttons
+        btn_layout = QHBoxLayout()
+        btn_reboot = QPushButton(get_text("reboot", self.lang))
+        btn_reboot.setMinimumHeight(60)
+        btn_reboot.setFont(QFont("Sans", 14, QFont.Bold))
+        btn_reboot.setStyleSheet("background-color: #1DB954; color: white; border: none; border-radius: 5px;")
+        btn_reboot.clicked.connect(lambda: os.system("reboot"))
+        btn_layout.addWidget(btn_reboot)
+        
+        layout.addLayout(btn_layout)
+        self.setLayout(layout)
+
+# ── Main Application ───────────────────────────────────────────────
+
+class InstallerApp(QMainWindow):
+    """Main installer application"""
+    def __init__(self, lang="ru"):
+        super().__init__()
+        self.lang = lang
+        self.state = {}
+        
+        self.setWindowTitle(get_text("title", lang))
+        self.setGeometry(0, 0, 1024, 768)
+        
+        # Set style
+        self.setStyleSheet("""
+            QMainWindow { background-color: #1A1A1A; }
+            QWidget { background-color: #1A1A1A; color: #FFFFFF; }
+            QLineEdit, QComboBox, QSpinBox { 
+                background-color: #2D2D2D; 
+                color: #FFFFFF; 
+                padding: 5px; 
+                border: 2px solid #444;
+                border-radius: 4px;
+            }
+            QLineEdit:focus, QComboBox:focus { border: 2px solid #1DB954; }
+            QTableWidget {
+                background-color: #2D2D2D;
+                alternate-background-color: #252525;
+            }
+            QTableWidget::item { padding: 5px; }
+            QTableWidget::item:selected { background-color: #1DB954; }
+            QGroupBox { color: #FFFFFF; border: 2px solid #444; padding: 10px; }
+            QGroupBox::title { subcontrol-origin: margin; left: 10px; padding: 0 5px; }
+            QPushButton { padding: 8px; }
+            QTextEdit { background-color: #2D2D2D; border: 2px solid #444; border-radius: 4px; }
+        """)
+        
+        # Central widget with stacked layout
+        self.stacked = QStackedWidget()
+        self.setCentralWidget(self.stacked)
+        
+        # Create screens
+        self.screens = {
+            "welcome": WelcomeScreen(self, lang),
+            "disk": DiskSelectionScreen(self, lang),
+            "partitioning": PartitioningScreen(self, lang),
+            "locale": LocaleScreen(self, lang),
+            "user": UserScreen(self, lang),
+            "confirm": ConfirmScreen(self, lang),
+            "install": InstallationScreen(self, lang),
+            "done": DoneScreen(self, lang),
+        }
+        
+        for screen in self.screens.values():
+            self.stacked.addWidget(screen)
+        
+        self.show_screen("welcome")
+    
+    def show_screen(self, name: str):
+        """Show a screen by name"""
+        if name in self.screens:
+            screen = self.screens[name]
+            if hasattr(screen, 'on_show'):
+                screen.on_show()
+            self.stacked.setCurrentWidget(screen)
+    
+    def closeApplication(self):
+        """Close application"""
+        reply = QMessageBox.question(self, get_text("quit", self.lang),
+                                    "Вы уверены что хотите выйти из установщика?",
+                                    QMessageBox.Yes | QMessageBox.No)
+        if reply == QMessageBox.Yes:
+            self.close()
+
+# ── Entry Point ───────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    # Detect language from system
+    lang = "ru" if os.environ.get("LANG", "").startswith("ru") else "en"
+    
+    app = QApplication(sys.argv)
+    window = InstallerApp(lang)
+    window.showMaximized()
+    sys.exit(app.exec_())

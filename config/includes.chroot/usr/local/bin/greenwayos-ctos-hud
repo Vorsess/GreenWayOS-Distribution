@@ -1,0 +1,256 @@
+#!/usr/bin/env python3
+"""GreenWayOS ctOS HUD — Live welcome / control panel."""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+LOG = "/var/log/greenwayos-ctos-hud.log"
+
+
+def log(msg: str) -> None:
+    try:
+        os.makedirs("/var/log", exist_ok=True)
+        with open(LOG, "a", encoding="utf-8") as f:
+            f.write(msg + "\n")
+    except OSError:
+        pass
+
+
+def load_branding() -> dict:
+    path = "/usr/share/greenwayos/ctos/branding.json"
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {
+            "colors": {
+                "bg": "#0A0E12",
+                "cyan": "#00E8FF",
+                "green": "#1DB954",
+                "text": "#E6F1FF",
+                "muted": "#7A8B9A",
+                "panel": "#0D1117",
+            },
+            "strings": {
+                "boot_ok": "SYSTEM ONLINE",
+                "live": "LIVE NODE",
+                "install": "INSTALL PROTOCOL",
+            },
+        }
+
+
+def is_live() -> bool:
+    return os.path.exists("/run/live/medium") or os.path.isdir("/lib/live")
+
+
+def main() -> int:
+    brand = load_branding()
+    colors = brand.get("colors", {})
+    strings = brand.get("strings", {})
+    bg = colors.get("bg", "#0A0E12")
+    cyan = colors.get("cyan", "#00E8FF")
+    green = colors.get("green", "#1DB954")
+    text = colors.get("text", "#E6F1FF")
+    muted = colors.get("muted", "#7A8B9A")
+    panel = colors.get("panel", "#0D1117")
+
+    try:
+        from PyQt5.QtCore import Qt, QTimer
+        from PyQt5.QtGui import QFont, QColor, QPainter, QPen
+        from PyQt5.QtWidgets import (
+            QApplication,
+            QWidget,
+            QVBoxLayout,
+            QHBoxLayout,
+            QLabel,
+            QPushButton,
+            QFrame,
+        )
+    except ImportError:
+        log("PyQt5 missing — falling back to legacy welcome")
+        legacy = "/usr/local/bin/greenwayos-welcome-legacy"
+        if os.path.isfile(legacy):
+            os.execv(legacy, [legacy])
+        print("PyQt5 required for ctOS HUD", file=sys.stderr)
+        return 1
+
+    class ScanlineOverlay(QWidget):
+        def paintEvent(self, _event):
+            p = QPainter(self)
+            p.setPen(QPen(QColor(0, 232, 255, 18)))
+            for y in range(0, self.height(), 3):
+                p.drawLine(0, y, self.width(), y)
+
+    class HudButton(QPushButton):
+        def __init__(self, label: str, primary: bool = False):
+            super().__init__(label)
+            self.setCursor(Qt.PointingHandCursor)
+            self.setMinimumHeight(44)
+            if primary:
+                self.setStyleSheet(
+                    f"QPushButton {{ background:{panel}; color:{cyan}; border:1px solid {cyan}; "
+                    f"font-family:'JetBrains Mono','DejaVu Sans Mono',monospace; font-size:13px; "
+                    f"font-weight:bold; padding:8px 16px; }}"
+                    f"QPushButton:hover {{ background:rgba(0,232,255,40); }}"
+                )
+            else:
+                self.setStyleSheet(
+                    f"QPushButton {{ background:{panel}; color:{text}; border:1px solid #1C2A33; "
+                    f"font-family:'JetBrains Mono','DejaVu Sans Mono',monospace; font-size:12px; "
+                    f"padding:8px 16px; }}"
+                    f"QPushButton:hover {{ border-color:{green}; color:{green}; }}"
+                )
+
+    class HudWindow(QWidget):
+        def __init__(self):
+            super().__init__()
+            self.setWindowTitle("GreenWayOS // ctOS")
+            self.setWindowFlags(Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint)
+            self.resize(760, 480)
+            self.setStyleSheet(f"QWidget {{ background-color: {bg}; color: {text}; }}")
+
+            root = QVBoxLayout(self)
+            root.setContentsMargins(28, 24, 28, 24)
+            root.setSpacing(12)
+
+            top = QHBoxLayout()
+            brand_lbl = QLabel("GREENWAYOS  //  ctOS")
+            brand_lbl.setFont(QFont("JetBrains Mono", 11, QFont.Bold))
+            brand_lbl.setStyleSheet(f"color: {cyan};")
+            top.addWidget(brand_lbl)
+            top.addStretch()
+            self.status = QLabel("BOOT SEQUENCE...")
+            self.status.setFont(QFont("JetBrains Mono", 9))
+            self.status.setStyleSheet(f"color: {muted};")
+            top.addWidget(self.status)
+            root.addLayout(top)
+
+            line = QFrame()
+            line.setFixedHeight(1)
+            line.setStyleSheet(f"background: {cyan};")
+            root.addWidget(line)
+
+            self.title = QLabel("INITIALIZING NODE")
+            self.title.setAlignment(Qt.AlignCenter)
+            self.title.setFont(QFont("JetBrains Mono", 22, QFont.Bold))
+            self.title.setStyleSheet(f"color: {text}; margin-top: 24px;")
+            root.addWidget(self.title)
+
+            self.sub = QLabel("link://local · waiting for handshake")
+            self.sub.setAlignment(Qt.AlignCenter)
+            self.sub.setFont(QFont("JetBrains Mono", 10))
+            self.sub.setStyleSheet(f"color: {muted};")
+            root.addWidget(self.sub)
+
+            root.addStretch()
+
+            btn_row = QHBoxLayout()
+            btn_row.setSpacing(10)
+            self.btn_live = HudButton(strings.get("live", "LIVE NODE"), primary=True)
+            self.btn_install = HudButton(strings.get("install", "INSTALL PROTOCOL"), primary=True)
+            self.btn_term = HudButton("INSTALL // TTY")
+            self.btn_about = HudButton("ABOUT")
+            self.btn_quit = HudButton("DISCONNECT")
+            for b in (self.btn_live, self.btn_install, self.btn_term, self.btn_about, self.btn_quit):
+                b.setEnabled(False)
+                btn_row.addWidget(b)
+            root.addLayout(btn_row)
+
+            foot = QLabel("ORIGINAL HUD SKIN · GREENWAY PROJECT")
+            foot.setAlignment(Qt.AlignCenter)
+            foot.setFont(QFont("JetBrains Mono", 8))
+            foot.setStyleSheet(f"color: {muted}; margin-top: 8px;")
+            root.addWidget(foot)
+
+            self.overlay = ScanlineOverlay(self)
+            self.overlay.setAttribute(Qt.WA_TransparentForMouseEvents)
+            self.overlay.setGeometry(self.rect())
+
+            self.btn_live.clicked.connect(self.close)
+            self.btn_install.clicked.connect(self.launch_gui_install)
+            self.btn_term.clicked.connect(self.launch_text_install)
+            self.btn_about.clicked.connect(self.launch_about)
+            self.btn_quit.clicked.connect(self.close)
+
+            if not is_live():
+                self.btn_install.hide()
+                self.btn_term.hide()
+
+            self._boot_step = 0
+            self._boot_lines = [
+                "mounting overlayfs...",
+                "loading network stack...",
+                "syncing ctOS theme...",
+                strings.get("boot_ok", "SYSTEM ONLINE"),
+            ]
+            QTimer.singleShot(400, self._tick_boot)
+
+        def resizeEvent(self, event):
+            super().resizeEvent(event)
+            self.overlay.setGeometry(self.rect())
+
+        def _tick_boot(self):
+            if self._boot_step < len(self._boot_lines):
+                self.sub.setText(self._boot_lines[self._boot_step])
+                self.status.setText(f"SEQ {self._boot_step + 1}/{len(self._boot_lines)}")
+                self._boot_step += 1
+                QTimer.singleShot(450, self._tick_boot)
+                return
+            self.title.setText(strings.get("boot_ok", "SYSTEM ONLINE"))
+            self.title.setStyleSheet(f"color: {green}; margin-top: 24px;")
+            self.sub.setText("desktop ready · select protocol")
+            self.status.setText("LINK ESTABLISHED")
+            self.status.setStyleSheet(f"color: {green};")
+            for b in (self.btn_live, self.btn_install, self.btn_term, self.btn_about, self.btn_quit):
+                b.setEnabled(True)
+
+        def launch_gui_install(self):
+            log("launch gui installer")
+            try:
+                if shutil.which("pkexec"):
+                    subprocess.Popen(["pkexec", "/usr/local/bin/greenwayos-installer-gui"])
+                else:
+                    subprocess.Popen(["sudo", "-E", "/usr/local/bin/greenwayos-installer-gui"])
+            except Exception as exc:
+                log(f"gui install failed: {exc}")
+            self.close()
+
+        def launch_text_install(self):
+            log("launch text installer")
+            try:
+                term = shutil.which("xfce4-terminal") or shutil.which("x-terminal-emulator")
+                if term:
+                    subprocess.Popen(
+                        [
+                            term,
+                            "-e",
+                            "bash -lc 'sudo openvt -f -s -w -- greenwayos-installer; read -n1'",
+                        ]
+                    )
+            except Exception as exc:
+                log(f"text install failed: {exc}")
+            self.close()
+
+        def launch_about(self):
+            if os.path.isfile("/usr/local/bin/greenwayos-about"):
+                subprocess.Popen(["/usr/local/bin/greenwayos-about"])
+
+    os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "0")
+    app = QApplication(sys.argv)
+    app.setStyle("Fusion")
+    win = HudWindow()
+    screen = app.primaryScreen()
+    if screen:
+        geo = screen.availableGeometry()
+        win.move(geo.center().x() - win.width() // 2, geo.center().y() - win.height() // 2)
+    win.show()
+    log("ctOS HUD started")
+    return app.exec_()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

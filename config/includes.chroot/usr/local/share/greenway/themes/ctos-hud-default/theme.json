@@ -1,0 +1,33 @@
+{
+  "name": "ctOS HUD Default",
+  "description": "Стандартная тема GreenWayOS в стиле Watch Dogs ctOS HUD",
+  "author": "GreenWayOS Team",
+  "version": "2.0",
+  "supports_dark": true,
+  "supports_light": false,
+  "hud_style": "watchdogs",
+  "sound_scheme": "freedesktop",
+  "wallpaper": "/usr/share/backgrounds/greenway/ctos-hud-default.jpg",
+  "gtk_theme": "Adwaita-dark",
+  "icon_theme": "Papirus-Dark",
+  "cursor_theme": "Adwaita",
+  "fonts": {
+    "interface": "Roboto 11",
+    "document": "Roboto 11",
+    "monospace": "Fira Code 10",
+    "titlebar": "Roboto Bold 11"
+  },
+  "colors": {
+    "primary": "#00d9ff",
+    "secondary": "#ff6b00",
+    "accent": "#00ff88",
+    "background": "#0a0a0a",
+    "text": "#ffffff",
+    "terminal_palette": "#000000:#00d9ff:#00ff88:#ff6b00:#00d9ff:#00ff88:#ff6b00:#ffffff:#4d4d4d:#00d9ff:#00ff88:#ff6b00:#00d9ff:#00ff88:#ff6b00:#ffffff"
+  },
+  "animations": {
+    "enable": true,
+    "speed": "fast",
+    "effects": ["fade", "slide", "glitch"]
+  }
+}

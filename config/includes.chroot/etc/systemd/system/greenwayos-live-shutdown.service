@@ -1,0 +1,16 @@
+[Unit]
+Description=GreenWayOS live shutdown cleanup (best-effort)
+DefaultDependencies=no
+Before=umount.target shutdown.target
+Conflicts=shutdown.target
+ConditionPathExists=/run/live/medium
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'sync; umount -l /run/live/medium 2>/dev/null || true; losetup -D 2>/dev/null || true; true'
+TimeoutStartSec=10
+RemainAfterExit=yes
+
+[Install]
+WantedBy=shutdown.target
+

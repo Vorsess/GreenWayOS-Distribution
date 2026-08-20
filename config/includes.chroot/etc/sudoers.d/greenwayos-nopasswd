@@ -1,0 +1,4 @@
+# Live-mode: passwordless sudo for the default live user.
+# The live user has no password set, so password-required sudo would be unusable.
+user ALL=(ALL) NOPASSWD: ALL
+

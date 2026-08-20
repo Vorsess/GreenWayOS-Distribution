@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ -f /etc/os-release ]]; then
+  # shellcheck disable=SC1091
+  . /etc/os-release
+fi
+
+creator="${GREENWAYOS_CREATOR:-Sergey Karamyshev}"
+github="${GREENWAYOS_GITHUB:-Vorsess}"
+
+GREEN=$'\e[1;32m'
+CYAN=$'\e[1;36m'
+YELLOW=$'\e[1;33m'
+DIM=$'\e[2m'
+RESET=$'\e[0m'
+
+cat << 'EOF'
+
+      __      __
+ ___ /  \____/  \ ___
+/ _ \  \__/\__/  / _ \
+| (_) |  ||  \/  ||  | (_) |
+ \___/|__/\______/\__|___/
+        GreenWayOS
+
+EOF
+
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "${YELLOW}  OS Information${RESET}"
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+printf "  %-20s %s\n" "Name:"        "${PRETTY_NAME:-GreenWayOS 1.0}"
+printf "  %-20s %s\n" "Version:"     "${VERSION:-1.0}"
+printf "  %-20s %s\n" "Base:"        "Linux (Bookworm-based)"
+printf "  %-20s %s\n" "Architecture:" "$(uname -m)"
+printf "  %-20s %s\n" "Kernel:"      "$(uname -r)"
+printf "  %-20s %s\n" "Purpose:"     "Systems Engineering & Security Toolkit"
+echo
+
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "${YELLOW}  Developer${RESET}"
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+printf "  %-20s %s\n" "Creator:"     "${creator}"
+printf "  %-20s %s\n" "GitHub:"      "https://github.com/${github}"
+printf "  %-20s %s\n" "License:"     "MIT"
+printf "  %-20s %s\n" "Build type:"  "Custom Live ISO"
+echo
+
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "${YELLOW}  Installed Security & Network Toolkit${RESET}"
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "  ${CYAN}Network analysis:${RESET}     nmap · tcpdump · tshark · wireshark"
+echo "  ${CYAN}Tunneling/VPN:${RESET}        openvpn"
+echo "  ${CYAN}Troubleshooting:${RESET}      traceroute · dnsutils · whois · net-tools"
+echo "  ${CYAN}Traffic monitoring:${RESET}   iftop · netstat · ss · iproute2"
+echo "  ${CYAN}System tracing:${RESET}       strace · lsof · sysstat"
+echo "  ${CYAN}Firewall:${RESET}             iptables-persistent (rules: /etc/iptables/rules.v4)"
+echo
+
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "${YELLOW}  Desktop & Utilities${RESET}"
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "  ${CYAN}Desktop:${RESET}              XFCE4 + LightDM autologin"
+echo "  ${CYAN}Browser:${RESET}              Firefox ESR"
+echo "  ${CYAN}Office:${RESET}               LibreOffice Writer + Calc"
+echo "  ${CYAN}Terminal:${RESET}             Terminator"
+echo "  ${CYAN}Remote desktop:${RESET}       Remmina"
+echo "  ${CYAN}Disk management:${RESET}      GParted"
+echo
+
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "${YELLOW}  GreenWayOS Commands${RESET}"
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "  ${CYAN}sys-dashboard${RESET}         Live system monitor (CPU, RAM, network)"
+echo "  ${CYAN}neofetch${RESET}              GreenWayOS terminal branding"
+echo "  ${CYAN}greenwayos-about${RESET}      This information screen"
+echo "  ${DIM}greenwayos-installer${RESET}  TUI disk installer (run as root)"
+echo
+
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "${DIM}  Boot ISO includes: Live-mode · Graphical Install · Text Install${RESET}"
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo

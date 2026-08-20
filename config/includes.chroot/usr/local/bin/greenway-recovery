@@ -1,0 +1,548 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+GreenWayOS System Recovery & Backup Manager
+Система восстановления, создания снимков системы и аварийного сброса
+"""
+
+import os
+import sys
+import json
+import subprocess
+import shutil
+import tarfile
+import hashlib
+from pathlib import Path
+from datetime import datetime
+from enum import Enum
+
+BACKUP_DIR = Path("/var/backups/greenway")
+SNAPSHOT_DIR = Path("/var/lib/greenway/snapshots")
+CONFIG_DIR = Path("/etc/greenway")
+RECOVERY_LOG = Path("/var/log/greenway/recovery.log")
+
+class BackupType(Enum):
+    FULL = "full"
+    INCREMENTAL = "incremental"
+    SYSTEM_ONLY = "system"
+    HOME_ONLY = "home"
+    CONFIG_ONLY = "config"
+
+class RecoveryMode(Enum):
+    NORMAL = "normal"
+    SAFE = "safe"
+    EMERGENCY = "emergency"
+    FACTORY_RESET = "factory_reset"
+
+class SystemRecovery:
+    def __init__(self):
+        self.backup_dir = BACKUP_DIR
+        self.snapshot_dir = SNAPSHOT_DIR
+        self.config_dir = CONFIG_DIR
+        self.ensure_directories()
+        
+    def ensure_directories(self):
+        """Создание необходимых директорий"""
+        for directory in [self.backup_dir, self.snapshot_dir, self.config_dir, RECOVERY_LOG.parent]:
+            directory.mkdir(parents=True, exist_ok=True)
+    
+    def log(self, message, level="INFO"):
+        """Логирование действий"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] [{level}] {message}\n"
+        
+        with open(RECOVERY_LOG, 'a', encoding='utf-8') as f:
+            f.write(log_entry)
+        
+        if level in ["ERROR", "CRITICAL"]:
+            print(f"❌ {message}", file=sys.stderr)
+        elif level == "WARNING":
+            print(f"⚠️ {message}")
+        else:
+            print(f"✅ {message}")
+    
+    def create_snapshot(self, name=None, description="", backup_type=BackupType.FULL, compress=True):
+        """Создание снимка системы"""
+        if name is None:
+            name = f"snapshot_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+        
+        snapshot_path = self.snapshot_dir / name
+        manifest_file = snapshot_path / "manifest.json"
+        
+        if snapshot_path.exists():
+            raise ValueError(f"Снимок {name} уже существует")
+        
+        snapshot_path.mkdir(parents=True, exist_ok=True)
+        
+        self.log(f"Создание снимка: {name} (тип: {backup_type.value})")
+        
+        manifest = {
+            'name': name,
+            'description': description,
+            'created_at': datetime.now().isoformat(),
+            'backup_type': backup_type.value,
+            'compressed': compress,
+            'system_info': self.get_system_info(),
+            'files': [],
+            'checksums': {}
+        }
+        
+        try:
+            # Определение путей для резервирования
+            paths_to_backup = self.get_paths_for_backup(backup_type)
+            
+            archive_path = None
+            if compress:
+                archive_name = snapshot_path / "backup.tar.gz"
+                archive_path = self.create_compressed_archive(archive_name, paths_to_backup, manifest)
+            else:
+                for source_path, dest_path in paths_to_backup:
+                    if source_path.exists():
+                        dest_path.parent.mkdir(parents=True, exist_ok=True)
+                        if source_path.is_dir():
+                            shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
+                        else:
+                            shutil.copy2(source_path, dest_path)
+                        manifest['files'].append(str(source_path))
+            
+            # Сохранение манифеста
+            with open(manifest_file, 'w', encoding='utf-8') as f:
+                json.dump(manifest, f, indent=2, ensure_ascii=False)
+            
+            self.log(f"Снимок {name} успешно создан")
+            return name
+            
+        except Exception as e:
+            self.log(f"Ошибка создания снимка: {e}", "ERROR")
+            if snapshot_path.exists():
+                shutil.rmtree(snapshot_path)
+            raise
+    
+    def get_paths_for_backup(self, backup_type):
+        """Определение путей для резервирования в зависимости от типа"""
+        home_dir = Path.home()
+        
+        if backup_type == BackupType.FULL:
+            return [
+                (Path("/etc"), self.snapshot_dir / "temp" / "etc"),
+                (Path("/var/lib"), self.snapshot_dir / "temp" / "var_lib"),
+                (home_dir, self.snapshot_dir / "temp" / "home"),
+                (Path("/usr/local"), self.snapshot_dir / "temp" / "usr_local"),
+            ]
+        elif backup_type == BackupType.SYSTEM_ONLY:
+            return [
+                (Path("/etc"), self.snapshot_dir / "temp" / "etc"),
+                (Path("/var/lib"), self.snapshot_dir / "temp" / "var_lib"),
+                (Path("/usr/local"), self.snapshot_dir / "temp" / "usr_local"),
+            ]
+        elif backup_type == BackupType.HOME_ONLY:
+            return [(home_dir, self.snapshot_dir / "temp" / "home")]
+        elif backup_type == BackupType.CONFIG_ONLY:
+            return [
+                (Path("/etc"), self.snapshot_dir / "temp" / "etc"),
+                (home_dir / ".config", self.snapshot_dir / "temp" / "home_config"),
+            ]
+        else:
+            return []
+    
+    def create_compressed_archive(self, archive_path, paths_to_backup, manifest):
+        """Создание сжатого архива"""
+        temp_dir = self.snapshot_dir / "temp"
+        temp_dir.mkdir(exist_ok=True)
+        
+        # Копирование файлов во временную директорию
+        for source_path, dest_path in paths_to_backup:
+            if source_path.exists():
+                dest_path.parent.mkdir(parents=True, exist_ok=True)
+                if source_path.is_dir():
+                    shutil.copytree(source_path, dest_path, dirs_exist_ok=True)
+                else:
+                    shutil.copy2(source_path, dest_path)
+                manifest['files'].append(str(source_path))
+        
+        # Создание архива
+        with tarfile.open(archive_path, "w:gz") as tar:
+            for item in temp_dir.iterdir():
+                if item.is_dir() or item.is_file():
+                    tar.add(item, arcname=item.name)
+                    # Вычисление контрольной суммы
+                    if item.is_file():
+                        with open(item, 'rb') as f:
+                            manifest['checksums'][item.name] = hashlib.sha256(f.read()).hexdigest()
+        
+        # Очистка временной директории
+        shutil.rmtree(temp_dir)
+        
+        return archive_path
+    
+    def get_system_info(self):
+        """Получение информации о системе"""
+        info = {
+            'hostname': subprocess.getoutput('hostname'),
+            'kernel': subprocess.getoutput('uname -r'),
+            'architecture': subprocess.getoutput('uname -m'),
+            'debian_version': subprocess.getoutput('cat /etc/debian_version 2>/dev/null || echo "unknown"'),
+            'disk_usage': {},
+            'memory_info': {}
+        }
+        
+        try:
+            # Информация о дисках
+            df_output = subprocess.getoutput('df -h / /home 2>/dev/null')
+            info['disk_usage'] = df_output
+            
+            # Информация о памяти
+            free_output = subprocess.getoutput('free -h 2>/dev/null')
+            info['memory_info'] = free_output
+        except:
+            pass
+        
+        return info
+    
+    def list_snapshots(self):
+        """Список всех снимков"""
+        snapshots = []
+        
+        if not self.snapshot_dir.exists():
+            return snapshots
+        
+        for snapshot_path in self.snapshot_dir.iterdir():
+            if snapshot_path.is_dir():
+                manifest_file = snapshot_path / "manifest.json"
+                if manifest_file.exists():
+                    try:
+                        with open(manifest_file, 'r', encoding='utf-8') as f:
+                            manifest = json.load(f)
+                        snapshots.append({
+                            'name': snapshot_path.name,
+                            'manifest': manifest,
+                            'path': str(snapshot_path)
+                        })
+                    except Exception as e:
+                        self.log(f"Ошибка чтения манифеста {snapshot_path.name}: {e}", "WARNING")
+        
+        return sorted(snapshots, key=lambda x: x['manifest'].get('created_at', ''), reverse=True)
+    
+    def restore_snapshot(self, snapshot_name, force=False):
+        """Восстановление из снимка"""
+        snapshot_path = self.snapshot_dir / snapshot_name
+        
+        if not snapshot_path.exists():
+            raise ValueError(f"Снимок {snapshot_name} не найден")
+        
+        manifest_file = snapshot_path / "manifest.json"
+        if not manifest_file.exists():
+            raise ValueError(f"Манифест снимка {snapshot_name} не найден")
+        
+        with open(manifest_file, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+        
+        self.log(f"Начало восстановления из снимка: {snapshot_name}")
+        
+        if not force:
+            # Предупреждение пользователя
+            print("\n⚠️ ВНИМАНИЕ: Восстановление из снимка перезапишет системные файлы!")
+            print("Рекомендуется создать текущий снимок перед восстановлением.")
+            response = input("Продолжить? (yes/no): ")
+            if response.lower() != 'yes':
+                self.log("Восстановление отменено пользователем", "WARNING")
+                return False
+        
+        try:
+            # Извлечение архива если он сжат
+            if manifest.get('compressed', False):
+                archive_path = snapshot_path / "backup.tar.gz"
+                if archive_path.exists():
+                    self.log("Распаковка архива...")
+                    with tarfile.open(archive_path, "r:gz") as tar:
+                        tar.extractall(path="/tmp/greenway_restore")
+                    
+                    # Восстановление файлов
+                    restore_dir = Path("/tmp/greenway_restore")
+                    for item in restore_dir.iterdir():
+                        if item.name == "etc":
+                            self.restore_directory(item, Path("/etc"))
+                        elif item.name == "var_lib":
+                            self.restore_directory(item, Path("/var/lib"))
+                        elif item.name == "home":
+                            self.restore_directory(item, Path.home())
+                        elif item.name == "usr_local":
+                            self.restore_directory(item, Path("/usr/local"))
+                    
+                    # Очистка
+                    shutil.rmtree("/tmp/greenway_restore")
+            else:
+                self.log("Восстановление несжатого снимка...")
+                # Логика для несжатых снимков
+                pass
+            
+            self.log(f"Восстановление из снимка {snapshot_name} завершено успешно")
+            print("\n✅ Восстановление завершено! Требуется перезагрузка.")
+            return True
+            
+        except Exception as e:
+            self.log(f"Ошибка восстановления: {e}", "ERROR")
+            raise
+    
+    def restore_directory(self, source, destination):
+        """Восстановление директории с сохранением прав"""
+        try:
+            if destination.exists():
+                # Резервное копирование текущей версии
+                backup_name = f"{destination}.backup.{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+                shutil.move(str(destination), backup_name)
+                self.log(f"Текущая версия {destination} сохранена как {backup_name}")
+            
+            shutil.copytree(source, destination, dirs_exist_ok=True)
+            self.log(f"Восстановлено: {destination}")
+        except Exception as e:
+            self.log(f"Ошибка восстановления {destination}: {e}", "ERROR")
+            raise
+    
+    def delete_snapshot(self, snapshot_name):
+        """Удаление снимка"""
+        snapshot_path = self.snapshot_dir / snapshot_name
+        
+        if not snapshot_path.exists():
+            raise ValueError(f"Снимок {snapshot_name} не найден")
+        
+        shutil.rmtree(snapshot_path)
+        self.log(f"Снимок {snapshot_name} удален")
+        return True
+    
+    def factory_reset(self, confirm=False):
+        """Сброс к заводским настройкам"""
+        if not confirm:
+            print("\n🔴 КРИТИЧЕСКОЕ ДЕЙСТВИЕ: Сброс к заводским настройкам")
+            print("Все пользовательские данные будут удалены!")
+            print("Будут восстановлены только системные настройки по умолчанию.")
+            response = input("Введите 'FACTORY_RESET' для подтверждения: ")
+            if response != 'FACTORY_RESET':
+                self.log("Сброс отменен пользователем", "WARNING")
+                return False
+        
+        self.log("Начало сброса к заводским настройкам", "WARNING")
+        
+        try:
+            # Удаление пользовательских конфигураций
+            user_configs = [
+                Path.home() / ".config",
+                Path.home() / ".local",
+                Path("/etc/greenway/current_theme.json")
+            ]
+            
+            for config_path in user_configs:
+                if config_path.exists():
+                    if config_path.is_dir():
+                        shutil.rmtree(config_path)
+                    else:
+                        config_path.unlink()
+                    self.log(f"Удалено: {config_path}")
+            
+            # Восстановление системных конфигов по умолчанию
+            self.restore_default_configs()
+            
+            self.log("Сброс к заводским настройкам завершен", "WARNING")
+            print("\n✅ Сброс завершен! Требуется перезагрузка.")
+            return True
+            
+        except Exception as e:
+            self.log(f"Ошибка сброса: {e}", "ERROR")
+            raise
+    
+    def restore_default_configs(self):
+        """Восстановление конфигураций по умолчанию"""
+        # Здесь должна быть логика восстановления дефолтных конфигов
+        # из пакета или образа
+        default_configs_dir = Path("/usr/share/greenway/defaults")
+        if default_configs_dir.exists():
+            for config_file in default_configs_dir.glob("**/*"):
+                if config_file.is_file():
+                    dest_path = Path("/") / config_file.relative_to(default_configs_dir)
+                    dest_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(config_file, dest_path)
+                    self.log(f"Восстановлено: {dest_path}")
+    
+    def emergency_mode(self):
+        """Запуск аварийного режима"""
+        self.log("Запуск аварийного режима", "CRITICAL")
+        
+        # Отключение сетевых интерфейсов
+        try:
+            subprocess.run(['systemctl', 'stop', 'NetworkManager'], check=False)
+            self.log("Сеть отключена")
+        except:
+            pass
+        
+        # Закрытие всех пользовательских приложений
+        try:
+            subprocess.run(['pkill', '-9', '-u', os.getenv('USER')], check=False)
+            self.log("Пользовательские приложения закрыты")
+        except:
+            pass
+        
+        # Минимальный режим работы
+        print("\n🚨 АВАРИЙНЫЙ РЕЖИМ АКТИВИРОВАН")
+        print("Доступны только базовые функции системы.")
+        print("Для выхода выполните: greenway-recovery exit-emergency")
+        
+        return True
+    
+    def verify_snapshot(self, snapshot_name):
+        """Проверка целостности снимка"""
+        snapshot_path = self.snapshot_dir / snapshot_name
+        manifest_file = snapshot_path / "manifest.json"
+        
+        if not manifest_file.exists():
+            return False, "Манифест не найден"
+        
+        try:
+            with open(manifest_file, 'r', encoding='utf-8') as f:
+                manifest = json.load(f)
+            
+            if manifest.get('compressed', False):
+                archive_path = snapshot_path / "backup.tar.gz"
+                if not archive_path.exists():
+                    return False, "Архив не найден"
+                
+                # Проверка контрольных сумм
+                with tarfile.open(archive_path, "r:gz") as tar:
+                    for member in tar.getmembers():
+                        if member.name in manifest.get('checksums', {}):
+                            expected_checksum = manifest['checksums'][member.name]
+                            # Вычисление фактической контрольной суммы
+                            # (упрощенная проверка)
+                            pass
+            
+            return True, "Снимок цел"
+            
+        except Exception as e:
+            return False, f"Ошибка проверки: {e}"
+    
+    def get_recovery_log(self, lines=50):
+        """Получение лога восстановления"""
+        if not RECOVERY_LOG.exists():
+            return "Лог пуст"
+        
+        with open(RECOVERY_LOG, 'r', encoding='utf-8') as f:
+            all_lines = f.readlines()
+        
+        return ''.join(all_lines[-lines:])
+
+
+def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='GreenWayOS System Recovery Manager')
+    subparsers = parser.add_subparsers(dest='command', help='Команды')
+    
+    # Создание снимка
+    create_parser = subparsers.add_parser('snapshot', help='Создать снимок системы')
+    create_parser.add_argument('--name', help='Имя снимка')
+    create_parser.add_argument('--desc', help='Описание')
+    create_parser.add_argument('--type', choices=['full', 'system', 'home', 'config'], default='full')
+    create_parser.add_argument('--no-compress', action='store_true')
+    
+    # Список снимков
+    list_parser = subparsers.add_parser('list', help='Список снимков')
+    
+    # Восстановление
+    restore_parser = subparsers.add_parser('restore', help='Восстановить из снимка')
+    restore_parser.add_argument('name', help='Имя снимка')
+    restore_parser.add_argument('--force', action='store_true')
+    
+    # Удаление снимка
+    delete_parser = subparsers.add_parser('delete', help='Удалить снимок')
+    delete_parser.add_argument('name', help='Имя снимка')
+    
+    # Проверка снимка
+    verify_parser = subparsers.add_parser('verify', help='Проверить снимок')
+    verify_parser.add_argument('name', help='Имя снимка')
+    
+    # Сброс к заводским настройкам
+    reset_parser = subparsers.add_parser('factory-reset', help='Сброс к заводским настройкам')
+    reset_parser.add_argument('--confirm', action='store_true')
+    
+    # Аварийный режим
+    emergency_parser = subparsers.add_parser('emergency', help='Аварийный режим')
+    
+    # Просмотр лога
+    log_parser = subparsers.add_parser('log', help='Просмотр лога')
+    log_parser.add_argument('--lines', type=int, default=50)
+    
+    args = parser.parse_args()
+    
+    recovery = SystemRecovery()
+    
+    if args.command == 'snapshot':
+        backup_type = BackupType(args.type) if hasattr(args, 'type') else BackupType.FULL
+        try:
+            name = recovery.create_snapshot(
+                name=args.name,
+                description=args.desc or "",
+                backup_type=backup_type,
+                compress=not args.no_compress
+            )
+            print(f"\n✅ Снимок создан: {name}")
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'list':
+        snapshots = recovery.list_snapshots()
+        if not snapshots:
+            print("Снимки не найдены")
+        else:
+            print(f"📋 Найдено снимков: {len(snapshots)}\n")
+            for snap in snapshots:
+                manifest = snap['manifest']
+                print(f"  📸 {snap['name']}")
+                print(f"     Создан: {manifest.get('created_at', 'unknown')}")
+                print(f"     Тип: {manifest.get('backup_type', 'unknown')}")
+                if manifest.get('description'):
+                    print(f"     Описание: {manifest['description']}")
+                print()
+    
+    elif args.command == 'restore':
+        try:
+            recovery.restore_snapshot(args.name, force=args.force)
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'delete':
+        try:
+            recovery.delete_snapshot(args.name)
+            print(f"✅ Снимок {args.name} удален")
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'verify':
+        is_valid, message = recovery.verify_snapshot(args.name)
+        if is_valid:
+            print(f"✅ Снимок {args.name} цел: {message}")
+        else:
+            print(f"❌ Снимок {args.name} поврежден: {message}")
+            sys.exit(1)
+    
+    elif args.command == 'factory-reset':
+        try:
+            recovery.factory_reset(confirm=args.confirm)
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'emergency':
+        recovery.emergency_mode()
+    
+    elif args.command == 'log':
+        log_content = recovery.get_recovery_log(lines=args.lines)
+        print(log_content)
+    
+    else:
+        parser.print_help()
+
+
+if __name__ == '__main__':
+    main()

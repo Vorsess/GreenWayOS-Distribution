@@ -1,0 +1,16 @@
+[Unit]
+Description=GreenWayOS installer console banner
+ConditionKernelCommandLine=greenwayos.install=1
+After=plymouth-quit.service
+Before=greenwayos-gui-install.service greenwayos-text-install.service
+DefaultDependencies=no
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/greenwayos-install-banner.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=multi-user.target

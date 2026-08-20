@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=GreenWayOS Audio Setup
+Comment=Start PulseAudio and unmute default sink
+Exec=/usr/local/bin/greenwayos-audio-setup
+OnlyShowIn=XFCE;X-Cinnamon;MATE;
+X-GNOME-Autostart-enabled=true
+X-XFCE-Autostart-Override=true
+NoDisplay=true

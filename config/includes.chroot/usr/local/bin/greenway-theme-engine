@@ -1,0 +1,414 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+GreenWayOS Dynamic Theme Engine (ctOS HUD Style)
+Управление темами, звуковыми схемами и визуальными эффектами в стиле Watch Dogs
+"""
+
+import os
+import sys
+import json
+import subprocess
+import shutil
+from pathlib import Path
+from datetime import datetime
+
+THEME_DIR = Path("/usr/local/share/greenway/themes")
+CONFIG_DIR = Path("/etc/greenway")
+USER_THEME_DIR = Path(os.path.expanduser("~/.local/share/greenway/themes"))
+CURRENT_THEME_FILE = CONFIG_DIR / "current_theme.json"
+
+class ThemeEngine:
+    def __init__(self):
+        self.themes = self.scan_themes()
+        self.current_theme = self.load_current_theme()
+        
+    def scan_themes(self):
+        """Сканирование доступных тем"""
+        themes = {}
+        for directory in [THEME_DIR, USER_THEME_DIR]:
+            if directory.exists():
+                for theme_path in directory.glob("*/theme.json"):
+                    try:
+                        with open(theme_path, 'r', encoding='utf-8') as f:
+                            theme_data = json.load(f)
+                            theme_id = theme_path.parent.name
+                            themes[theme_id] = {
+                                'name': theme_data.get('name', theme_id),
+                                'description': theme_data.get('description', ''),
+                                'author': theme_data.get('author', 'Unknown'),
+                                'version': theme_data.get('version', '1.0'),
+                                'path': theme_path.parent,
+                                'supports_dark': theme_data.get('supports_dark', True),
+                                'supports_light': theme_data.get('supports_light', False),
+                                'hud_style': theme_data.get('hud_style', 'default'),
+                                'sound_scheme': theme_data.get('sound_scheme', None),
+                                'wallpaper': theme_data.get('wallpaper', None),
+                                'gtk_theme': theme_data.get('gtk_theme', None),
+                                'icon_theme': theme_data.get('icon_theme', None),
+                                'cursor_theme': theme_data.get('cursor_theme', None),
+                                'fonts': theme_data.get('fonts', {}),
+                                'colors': theme_data.get('colors', {}),
+                                'animations': theme_data.get('animations', {})
+                            }
+                    except Exception as e:
+                        print(f"Ошибка загрузки темы {theme_path}: {e}", file=sys.stderr)
+        return themes
+    
+    def load_current_theme(self):
+        """Загрузка текущей темы"""
+        if CURRENT_THEME_FILE.exists():
+            try:
+                with open(CURRENT_THEME_FILE, 'r', encoding='utf-8') as f:
+                    return json.load(f)
+            except:
+                pass
+        return {'theme_id': 'ctos-hud-default', 'auto_switch': False, 'schedule': []}
+    
+    def save_current_theme(self, theme_config):
+        """Сохранение текущей темы"""
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CURRENT_THEME_FILE, 'w', encoding='utf-8') as f:
+            json.dump(theme_config, f, indent=2, ensure_ascii=False)
+    
+    def apply_theme(self, theme_id):
+        """Применение темы"""
+        if theme_id not in self.themes:
+            raise ValueError(f"Тема {theme_id} не найдена")
+        
+        theme = self.themes[theme_id]
+        print(f"🎨 Применение темы: {theme['name']}")
+        
+        # Применение GTK темы
+        if theme.get('gtk_theme'):
+            self.apply_gtk_theme(theme['gtk_theme'])
+        
+        # Применение иконок
+        if theme.get('icon_theme'):
+            self.apply_icon_theme(theme['icon_theme'])
+        
+        # Применение курсора
+        if theme.get('cursor_theme'):
+            self.apply_cursor_theme(theme['cursor_theme'])
+        
+        # Применение шрифтов
+        if theme.get('fonts'):
+            self.apply_fonts(theme['fonts'])
+        
+        # Применение цветов
+        if theme.get('colors'):
+            self.apply_colors(theme['colors'])
+        
+        # Применение обоев
+        if theme.get('wallpaper'):
+            self.apply_wallpaper(theme['wallpaper'])
+        
+        # Применение звуковой схемы
+        if theme.get('sound_scheme'):
+            self.apply_sound_scheme(theme['sound_scheme'])
+        
+        # Применение анимаций
+        if theme.get('animations'):
+            self.apply_animations(theme['animations'])
+        
+        # Сохранение конфигурации
+        self.current_theme['theme_id'] = theme_id
+        self.save_current_theme(self.current_theme)
+        
+        print(f"✅ Тема {theme['name']} успешно применена")
+        return True
+    
+    def apply_gtk_theme(self, gtk_theme_name):
+        """Применение GTK темы"""
+        try:
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.interface', 'gtk-theme', gtk_theme_name], check=True)
+            # Для Qt приложений
+            qt_conf = Path.home() / ".config" / "Trolltech.conf"
+            qt_conf.parent.mkdir(parents=True, exist_ok=True)
+            with open(qt_conf, 'w') as f:
+                f.write(f"[Qt]\nstyle={gtk_theme_name}\n")
+        except Exception as e:
+            print(f"⚠️ Не удалось применить GTK тему: {e}")
+    
+    def apply_icon_theme(self, icon_theme_name):
+        """Применение темы иконок"""
+        try:
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.interface', 'icon-theme', icon_theme_name], check=True)
+        except Exception as e:
+            print(f"⚠️ Не удалось применить тему иконок: {e}")
+    
+    def apply_cursor_theme(self, cursor_theme_name):
+        """Применение темы курсора"""
+        try:
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.interface', 'cursor-theme', cursor_theme_name], check=True)
+        except Exception as e:
+            print(f"⚠️ Не удалось применить тему курсора: {e}")
+    
+    def apply_fonts(self, fonts_config):
+        """Применение шрифтов"""
+        font_map = {
+            'interface': 'font-name',
+            'document': 'document-font-name',
+            'monospace': 'monospace-font-name',
+            'titlebar': 'titlebar-font'
+        }
+        for font_type, font_value in fonts_config.items():
+            if font_type in font_map:
+                try:
+                    subprocess.run(['gsettings', 'set', 'org.gnome.desktop.interface', font_map[font_type], font_value], check=True)
+                except Exception as e:
+                    print(f"⚠️ Не удалось применить шрифт {font_type}: {e}")
+    
+    def apply_colors(self, colors_config):
+        """Применение цветовой схемы (для терминала и системных элементов)"""
+        # Применение для терминала GNOME
+        if 'terminal_palette' in colors_config:
+            try:
+                palette = colors_config['terminal_palette']
+                subprocess.run(['gsettings', 'set', 'org.gnome.Terminal.Legacy.Profile', 
+                              '/org/gnome/terminal/legacy/profiles:/:b1dcc9dd-5262-4d8d-a863-c897e6d979b9/', 
+                              'palette', palette], check=False)
+            except:
+                pass
+    
+    def apply_wallpaper(self, wallpaper_path):
+        """Применение обоев рабочего стола"""
+        try:
+            if isinstance(wallpaper_path, str) and wallpaper_path.startswith('/'):
+                wallpaper_file = wallpaper_path
+            else:
+                wallpaper_file = str(self.themes[self.current_theme['theme_id']]['path'] / wallpaper_path)
+            
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.background', 'picture-uri', f'file://{wallpaper_file}'], check=True)
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.background', 'picture-uri-dark', f'file://{wallpaper_file}'], check=True)
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.background', 'picture-options', 'zoom'], check=True)
+        except Exception as e:
+            print(f"⚠️ Не удалось применить обои: {e}")
+    
+    def apply_sound_scheme(self, sound_scheme_name):
+        """Применение звуковой схемы"""
+        try:
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.sound', 'theme', sound_scheme_name], check=True)
+        except Exception as e:
+            print(f"⚠️ Не удалось применить звуковую схему: {e}")
+    
+    def apply_animations(self, animations_config):
+        """Применение настроек анимации"""
+        enable_animations = animations_config.get('enable', True)
+        try:
+            subprocess.run(['gsettings', 'set', 'org.gnome.desktop.interface', 'enable-animations', str(enable_animations).lower()], check=True)
+            
+            if 'speed' in animations_config:
+                # Настройка скорости анимации через gsettings или компиз
+                speed = animations_config['speed']
+                if speed == 'fast':
+                    subprocess.run(['gsettings', 'set', 'org.gnome.mutter', 'overlay-key', 'Super_L'], check=False)
+        except Exception as e:
+            print(f"⚠️ Не удалось применить настройки анимации: {e}")
+    
+    def auto_switch_theme(self):
+        """Автоматическое переключение темы по времени суток"""
+        if not self.current_theme.get('auto_switch', False):
+            return
+        
+        current_hour = datetime.now().hour
+        schedule = self.current_theme.get('schedule', [])
+        
+        for item in schedule:
+            start_hour = item.get('start_hour', 0)
+            end_hour = item.get('end_hour', 24)
+            theme_id = item.get('theme_id')
+            
+            if start_hour <= current_hour < end_hour and theme_id:
+                if self.current_theme.get('active_theme_id') != theme_id:
+                    try:
+                        self.apply_theme(theme_id)
+                        self.current_theme['active_theme_id'] = theme_id
+                        self.save_current_theme(self.current_theme)
+                        print(f"🕐 Автоматически переключена тема на {self.themes[theme_id]['name']}")
+                    except Exception as e:
+                        print(f"❌ Ошибка авто-переключения темы: {e}")
+                break
+    
+    def create_custom_theme(self, theme_name, base_theme_id=None):
+        """Создание пользовательской темы"""
+        theme_id = theme_name.lower().replace(' ', '-').replace('_', '-')
+        user_theme_path = USER_THEME_DIR / theme_id
+        
+        if user_theme_path.exists():
+            raise ValueError(f"Тема {theme_id} уже существует")
+        
+        user_theme_path.mkdir(parents=True, exist_ok=True)
+        
+        # Базовая конфигурация
+        theme_config = {
+            'name': theme_name,
+            'description': f'Пользовательская тема: {theme_name}',
+            'author': os.getenv('USER', 'user'),
+            'version': '1.0',
+            'supports_dark': True,
+            'supports_light': False,
+            'hud_style': 'default',
+            'colors': {},
+            'fonts': {},
+            'animations': {'enable': True}
+        }
+        
+        # Копирование базовой темы если указана
+        if base_theme_id and base_theme_id in self.themes:
+            base_theme = self.themes[base_theme_id]
+            for key in ['gtk_theme', 'icon_theme', 'cursor_theme', 'wallpaper']:
+                if base_theme.get(key):
+                    theme_config[key] = base_theme[key]
+        
+        # Сохранение конфигурации
+        theme_file = user_theme_path / 'theme.json'
+        with open(theme_file, 'w', encoding='utf-8') as f:
+            json.dump(theme_config, f, indent=2, ensure_ascii=False)
+        
+        # Пересканирование тем
+        self.themes = self.scan_themes()
+        
+        print(f"✅ Создана новая тема: {theme_name} ({theme_id})")
+        return theme_id
+    
+    def export_theme(self, theme_id, output_path):
+        """Экспорт темы в архив"""
+        if theme_id not in self.themes:
+            raise ValueError(f"Тема {theme_id} не найдена")
+        
+        theme_path = self.themes[theme_id]['path']
+        output_file = Path(output_path)
+        
+        if not output_file.suffix:
+            output_file = output_file.with_suffix('.tar.gz')
+        
+        try:
+            subprocess.run(['tar', '-czf', str(output_file), '-C', str(theme_path.parent), theme_path.name], check=True)
+            print(f"✅ Тема экспортирована в {output_file}")
+            return str(output_file)
+        except Exception as e:
+            print(f"❌ Ошибка экспорта темы: {e}")
+            raise
+    
+    def import_theme(self, archive_path):
+        """Импорт темы из архива"""
+        archive_file = Path(archive_path)
+        if not archive_file.exists():
+            raise FileNotFoundError(f"Архив {archive_path} не найден")
+        
+        try:
+            # Временная директория для распаковки
+            import subprocess
+            temp_dir = Path("/tmp/greenway_theme_import")
+            temp_dir.mkdir(exist_ok=True)
+            
+            subprocess.run(['tar', '-xzf', str(archive_file), '-C', str(temp_dir)], check=True)
+            
+            # Поиск директории темы
+            theme_dirs = [d for d in temp_dir.iterdir() if d.is_dir() and (d / 'theme.json').exists()]
+            if not theme_dirs:
+                raise ValueError("В архиве не найдена корректная тема")
+            
+            source_dir = theme_dirs[0]
+            dest_dir = USER_THEME_DIR / source_dir.name
+            
+            if dest_dir.exists():
+                shutil.rmtree(dest_dir)
+            
+            shutil.copytree(source_dir, dest_dir)
+            
+            # Очистка
+            shutil.rmtree(temp_dir)
+            
+            # Пересканирование
+            self.themes = self.scan_themes()
+            
+            print(f"✅ Тема импортирована: {dest_dir.name}")
+            return dest_dir.name
+        except Exception as e:
+            print(f"❌ Ошибка импорта темы: {e}")
+            raise
+
+
+def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='GreenWayOS Theme Engine')
+    subparsers = parser.add_subparsers(dest='command', help='Команды')
+    
+    # Список тем
+    list_parser = subparsers.add_parser('list', help='Список доступных тем')
+    
+    # Применение темы
+    apply_parser = subparsers.add_parser('apply', help='Применить тему')
+    apply_parser.add_argument('theme_id', help='ID темы')
+    
+    # Авто-переключение
+    auto_parser = subparsers.add_parser('auto', help='Авто-переключение по времени')
+    
+    # Создание темы
+    create_parser = subparsers.add_parser('create', help='Создать новую тему')
+    create_parser.add_argument('name', help='Название темы')
+    create_parser.add_argument('--base', help='Базовая тема для копирования')
+    
+    # Экспорт темы
+    export_parser = subparsers.add_parser('export', help='Экспорт темы')
+    export_parser.add_argument('theme_id', help='ID темы')
+    export_parser.add_argument('output', help='Путь для сохранения')
+    
+    # Импорт темы
+    import_parser = subparsers.add_parser('import', help='Импорт темы')
+    import_parser.add_argument('archive', help='Путь к архиву с темой')
+    
+    args = parser.parse_args()
+    
+    engine = ThemeEngine()
+    
+    if args.command == 'list':
+        print("📋 Доступные темы:")
+        for theme_id, theme_info in engine.themes.items():
+            current_marker = " ⭐" if engine.current_theme.get('theme_id') == theme_id else ""
+            print(f"  {theme_id}{current_marker}: {theme_info['name']} v{theme_info['version']}")
+            if theme_info.get('description'):
+                print(f"     {theme_info['description']}")
+    
+    elif args.command == 'apply':
+        try:
+            engine.apply_theme(args.theme_id)
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'auto':
+        engine.auto_switch_theme()
+    
+    elif args.command == 'create':
+        try:
+            theme_id = engine.create_custom_theme(args.name, args.base)
+            print(f"Теперь вы можете настроить тему: greenway-theme apply {theme_id}")
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'export':
+        try:
+            engine.export_theme(args.theme_id, args.output)
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'import':
+        try:
+            theme_id = engine.import_theme(args.archive)
+            print(f"Тема импортирована. Примените: greenway-theme apply {theme_id}")
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    else:
+        parser.print_help()
+
+
+if __name__ == '__main__':
+    main()

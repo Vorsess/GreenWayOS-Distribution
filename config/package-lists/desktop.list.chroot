@@ -1,0 +1,114 @@
+# ════════════════════════════════════════════════════════════════════
+#  GreenWayOS Desktop Package List
+#  X11, window manager, and desktop applications
+# ════════════════════════════════════════════════════════════════════
+
+# X11 and display
+xorg
+xserver-xorg
+xserver-xorg-video-intel
+## xserver-xorg-video-qemu отсутствует, используйте xserver-xorg-video-qxl для QEMU/KVM
+xserver-xorg-video-qxl
+xserver-xorg-input-evdev
+
+# Desktop environment
+xfce4
+xfce4-goodies
+xfce4-panel
+xfce4-terminal
+xterm
+xfce4-whiskermenu-plugin
+
+# Window managers and utilities
+i3
+i3status
+i3lock
+rofi
+dunst
+
+# Display and compositing
+lightdm
+lightdm-gtk-greeter
+## xfce4-screensaver и light-locker отсутствуют в Debian Bookworm
+# light-locker (закомментировано - недоступен)
+picom
+
+# Fonts
+fonts-dejavu
+fonts-liberation
+fonts-noto
+fonts-noto-cjk
+fonts-firacode
+fonts-jetbrains-mono
+
+# Media / audio (panel pulse plugin needs xfce4-pulseaudio-plugin + pavucontrol)
+vlc
+alsa-utils
+alsa-ucm-conf
+pulseaudio
+pulseaudio-utils
+pavucontrol
+xfce4-pulseaudio-plugin
+xfce4-notifyd
+rtkit
+
+# Sound firmware (real HW + many laptops); non-free-firmware archive enabled in auto/config
+firmware-sof-signed
+firmware-intel-sound
+firmware-linux-free
+
+# Hypervisor guest tools (clipboard / DnD / shared folders)
+open-vm-tools
+open-vm-tools-desktop
+spice-vdagent
+
+# Keyboard layout switcher (panel xkb + us/ru)
+xfce4-xkb-plugin
+x11-xkb-utils
+keyboard-configuration
+
+# Office and productivity
+libreoffice-writer
+libreoffice-calc
+mousepad
+
+# Graphics
+gimp
+inkscape
+eog
+
+# Web browsers
+firefox-esr
+## firefox-l10n-ru и firefox-l10n-en-us отсутствуют, используйте flatpak/snap или актуальные deb-пакеты при необходимости
+
+# File managers
+thunar
+thunar-archive-plugin
+file-roller
+
+# Network tools GUI
+network-manager-gnome
+nm-tray
+
+# Remote access
+remmina
+freerdp2-x11
+openssh-client
+
+# Editors
+gedit
+pluma
+## code-oss отсутствует в Debian Bookworm, считайте другие опции
+# code-oss (закомментировано - недоступен)
+
+# VNC viewer
+xtightvncviewer
+
+# Display info
+neofetch
+screenfetch
+
+# Misc utilities
+dbus-x11
+xclip
+xsel

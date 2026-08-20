@@ -1,0 +1,21 @@
+#!/bin/sh
+# live-config hook: enforce GreenWayOS branding each live boot.
+set -e
+
+issue='GreenWayOS 1.0 \n \l'
+
+# live-config runs inside the live system; keep it simple and idempotent.
+printf '%s\n\n' "$issue" > /etc/issue
+printf '%s\n\n' "$issue" > /etc/issue.net
+
+# Keep existing motd if already customized; otherwise provide a minimal one.
+if ! grep -q 'GreenWayOS' /etc/motd 2>/dev/null; then
+  cat > /etc/motd <<'EOF'
+
+GreenWayOS v1.0  |  Systems Engineering Toolkit
+
+EOF
+fi
+
+exit 0
+

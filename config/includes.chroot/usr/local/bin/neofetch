@@ -1,0 +1,134 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+read_os() {
+  if [[ -f /etc/os-release ]]; then
+    # shellcheck disable=SC1091
+    . /etc/os-release
+    printf "%s" "${PRETTY_NAME:-$NAME}"
+    return
+  fi
+  echo "Unknown OS"
+}
+
+uptime_pretty() {
+  local s
+  s="$(cut -d. -f1 /proc/uptime | awk '{print int($1)}')"
+  local d=$((s/86400))
+  local h=$(((s%86400)/3600))
+  local m=$(((s%3600)/60))
+  if (( d > 0 )); then
+    printf "%dd %02dh %02dm" "$d" "$h" "$m"
+  elif (( h > 0 )); then
+    printf "%dh %02dm" "$h" "$m"
+  else
+    printf "%dm" "$m"
+  fi
+}
+
+cpu_model() {
+  awk -F: '/model name/ {gsub(/^[ \t]+/, "", $2); print $2; exit}' /proc/cpuinfo 2>/dev/null || true
+}
+
+ram_pretty() {
+  local total_kb free_kb used_kb
+  total_kb="$(awk '/MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  free_kb="$(awk '/MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  used_kb=$((total_kb - free_kb))
+  local total_mb=$((total_kb/1024))
+  local used_mb=$((used_kb/1024))
+  printf "%s / %s MB" "$used_mb" "$total_mb"
+}
+
+os="$(read_os)"
+host="$(hostname -s 2>/dev/null || hostname)"
+kernel="$(uname -r)"
+upt="$(uptime_pretty)"
+cpu="$(cpu_model)"
+ram="$(ram_pretty)"
+
+creator="$(awk -F= '/^GREENWAYOS_CREATOR=/{gsub(/"/,"",$2); print $2; exit}' /etc/os-release 2>/dev/null || true)"
+github="$(awk -F= '/^GREENWAYOS_GITHUB=/{gsub(/"/,"",$2); print $2; exit}' /etc/os-release 2>/dev/null || true)"
+creator_display="${creator:-Unknown creator}"
+if [[ -n "${github:-}" ]]; then
+  creator_display="${creator_display} (GitHub: ${github})"
+fi
+
+GREEN=$'\e[1;32m'
+CYAN=$'\e[1;36m'
+YELLOW=$'\e[1;33m'
+RESET=$'\e[0m'
+
+logo=(
+   ██████╗ ██████╗ ███████╗███████╗███╗   ██╗
+  ██╔════╝ ██╔══██╗██╔════╝██╔════╝████╗  ██║
+  ██║  ███╗██████╔╝█████╗  █████╗  ██╔██╗ ██║
+  ██║   ██║██╔══██╗██╔══╝  ██╔══╝  ██║╚██╗██║
+  ╚██████╔╝██║  ██║███████╗███████╗██║ ╚████║
+   ╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚═╝  ╚═══╝
+
+  ██╗    ██╗ █████╗ ██╗   ██╗ ██████╗ ███████╗
+  ██║    ██║██╔══██╗╚██╗ ██╔╝██╔═══██╗██╔════╝
+  ██║ █╗ ██║███████║ ╚████╔╝ ██║   ██║███████╗
+  ██║███╗██║██╔══██║  ╚██╔╝  ██║   ██║╚════██║
+  ╚███╔███╔╝██║  ██║   ██║   ╚██████╔╝███████║
+   ╚══╝╚══╝ ╚═╝  ╚═╝   ╚═╝    ╚═════╝ ╚══════╝
+)
+
+printf "%s\n" "$GREEN${logo[0]}$RESET"
+for i in 1 2 3 4; do
+  printf "%s\n" "$YELLOW${logo[$i]}$RESET"
+done
+printf "%s\n" "$CYAN${logo[5]}$RESET"
+printf "\n"
+
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "${YELLOW}  OS Information${RESET}"
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+printf "  %-20s %s\n" "Name:"        "${PRETTY_NAME:-GreenWayOS 1.0}"
+printf "  %-20s %s\n" "Version:"     "${VERSION:-1.0}"
+printf "  %-20s %s\n" "Base:"        "Linux (Bookworm-based)"
+printf "  %-20s %s\n" "Architecture:" "$(uname -m)"
+printf "  %-20s %s\n" "Kernel:"      "$(uname -r)"
+printf "  %-20s %s\n" "Purpose:"     "Systems Engineering & Security Toolkit"
+echo
+
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "${YELLOW}  Developer${RESET}"
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+printf "  %-20s %s\n" "Creator:"     "${creator}"
+printf "  %-20s %s\n" "GitHub:"      "https://github.com/${github}"
+printf "  %-20s %s\n" "License:"     "MIT"
+printf "  %-20s %s\n" "Build type:"  "Custom Live ISO"
+echo
+
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "${YELLOW}  Installed Security & Network Toolkit${RESET}"
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "  ${CYAN}Network analysis:${RESET}     nmap · tcpdump · tshark · wireshark"
+echo "  ${CYAN}Tunneling/VPN:${RESET}        openvpn"
+echo "  ${CYAN}Troubleshooting:${RESET}      traceroute · dnsutils · whois · net-tools"
+echo "  ${CYAN}Traffic monitoring:${RESET}   iftop · netstat · ss · iproute2"
+echo "  ${CYAN}System tracing:${RESET}       strace · lsof · sysstat"
+echo "  ${CYAN}Firewall:${RESET}             iptables-persistent (rules: /etc/iptables/rules.v4)"
+echo
+
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "${YELLOW}  Desktop & Utilities${RESET}"
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "  ${CYAN}Desktop:${RESET}              XFCE4 + LightDM autologin"
+echo "  ${CYAN}Browser:${RESET}              Firefox ESR"
+echo "  ${CYAN}Office:${RESET}               LibreOffice Writer + Calc"
+echo "  ${CYAN}Terminal:${RESET}             Terminator"
+echo "  ${CYAN}Remote desktop:${RESET}       Remmina"
+echo "  ${CYAN}Disk management:${RESET}      GParted"
+echo
+
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "${YELLOW}  GreenWayOS Commands${RESET}"
+echo "${GREEN}═══════════════════════════════════════════════════${RESET}"
+echo "  ${CYAN}sys-dashboard${RESET}         Live system monitor (CPU, RAM, network)"
+echo "  ${CYAN}neofetch${RESET}              GreenWayOS terminal branding"
+echo "  ${CYAN}greenwayos-about${RESET}      This information screen"
+echo "  ${DIM}greenwayos-installer${RESET}  TUI disk installer (run as root)"
+echo

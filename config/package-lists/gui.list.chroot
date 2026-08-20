@@ -1,0 +1,73 @@
+# X11 and Desktop Environment
+xorg
+xinit
+xauth
+# Video drivers for VMs (graphical installer on tty2 / Xorg :0)
+xserver-xorg-video-vmware
+xserver-xorg-video-vesa
+xserver-xorg-video-fbdev
+xfce4
+xfce4-goodies
+lightdm
+xfwm4
+
+# Network Management
+network-manager-gnome
+
+# Fonts for ctOS HUD (Live + installed)
+fonts-jetbrains-mono
+fonts-dejavu
+lightdm-gtk-greeter
+
+firefox-esr
+libreoffice-writer
+libreoffice-calc
+vlc
+mousepad
+
+# Audio + keyboard switcher (Live desktop tray)
+alsa-utils
+alsa-ucm-conf
+pulseaudio
+pulseaudio-utils
+pavucontrol
+xfce4-pulseaudio-plugin
+xfce4-notifyd
+rtkit
+firmware-sof-signed
+firmware-intel-sound
+firmware-linux-free
+xfce4-xkb-plugin
+x11-xkb-utils
+keyboard-configuration
+
+# VMware / VirtualBox clipboard + drag-drop + shared folders
+open-vm-tools
+open-vm-tools-desktop
+spice-vdagent
+
+# Engineering & Security Toolkit
+wireshark
+gparted
+remmina
+terminator
+dbus-x11
+
+# Firewall (ufw configured in base list)
+## iptables-persistent и netfilter-persistent удалены (конфликтуют с ufw)
+
+# Build tools (for sys-dashboard.c)
+gcc
+libc6-dev
+make
+
+# Python & scripting (python3-pyqt5 is in base.list.chroot for the GUI installer)
+python3
+python3-tk
+python3-curses
+python3-pil
+scrot
+
+# Bootloader essentials (for binary hooks)
+syslinux-common
+isolinux

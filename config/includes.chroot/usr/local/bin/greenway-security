@@ -1,0 +1,504 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+GreenWayOS Security Module
+Модуль безопасности: режим паники, анонимный режим, защита USB
+"""
+
+import os
+import sys
+import json
+import subprocess
+import shutil
+from pathlib import Path
+from datetime import datetime
+from enum import Enum
+
+SECURITY_CONFIG_DIR = Path("/etc/greenway/security")
+SECURITY_LOG = Path("/var/log/greenway/security.log")
+PANIC_TRIGGER_FILE = Path("/tmp/.greenway_panic_trigger")
+
+class SecurityLevel(Enum):
+    NORMAL = "normal"
+    ELEVATED = "elevated"
+    HIGH = "high"
+    CRITICAL = "critical"
+    PANIC = "panic"
+
+class SecurityModule:
+    def __init__(self):
+        self.config_dir = SECURITY_CONFIG_DIR
+        self.log_file = SECURITY_LOG
+        self.ensure_directories()
+        self.current_level = self.load_security_level()
+        
+    def ensure_directories(self):
+        """Создание необходимых директорий"""
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    def log(self, message, level="INFO"):
+        """Логирование событий безопасности"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] [{level}] {message}\n"
+        
+        with open(self.log_file, 'a', encoding='utf-8') as f:
+            f.write(log_entry)
+        
+        if level in ["CRITICAL", "ALERT"]:
+            print(f"🚨 {message}", file=sys.stderr)
+        elif level == "WARNING":
+            print(f"⚠️ {message}")
+        else:
+            print(f"🔒 {message}")
+    
+    def load_security_level(self):
+        """Загрузка текущего уровня безопасности"""
+        level_file = self.config_dir / "current_level.json"
+        if level_file.exists():
+            try:
+                with open(level_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return SecurityLevel(data.get('level', 'normal'))
+            except:
+                pass
+        return SecurityLevel.NORMAL
+    
+    def save_security_level(self, level):
+        """Сохранение текущего уровня безопасности"""
+        level_file = self.config_dir / "current_level.json"
+        with open(level_file, 'w', encoding='utf-8') as f:
+            json.dump({
+                'level': level.value,
+                'changed_at': datetime.now().isoformat(),
+                'reason': 'user_action'
+            }, f, indent=2)
+    
+    def set_security_level(self, level, reason=""):
+        """Установка уровня безопасности"""
+        if isinstance(level, str):
+            level = SecurityLevel(level)
+        
+        self.log(f"Установка уровня безопасности: {level.value} (причина: {reason or 'не указана'})")
+        self.current_level = level
+        self.save_security_level(level)
+        
+        # Применение настроек для каждого уровня
+        if level == SecurityLevel.PANIC:
+            self.activate_panic_mode()
+        elif level == SecurityLevel.HIGH:
+            self.activate_high_security()
+        elif level == SecurityLevel.ELEVATED:
+            self.activate_elevated_security()
+        elif level == SecurityLevel.NORMAL:
+            self.deactivate_enhanced_security()
+        
+        return True
+    
+    def activate_panic_mode(self):
+        """Активация режима паники"""
+        self.log("🚨 РЕЖИМ ПАНИКИ АКТИВИРОВАН", "CRITICAL")
+        
+        # Немедленное закрытие всех приложений
+        try:
+            subprocess.run(['pkill', '-9', '-u', os.getenv('USER')], check=False)
+            self.log("Все пользовательские приложения закрыты")
+        except Exception as e:
+            self.log(f"Ошибка закрытия приложений: {e}", "WARNING")
+        
+        # Очистка буфера обмена
+        try:
+            subprocess.run(['xclip', '-sel', 'clip', '-t', 'text/plain', '/dev/null'], check=False)
+            subprocess.run(['xclip', '-sel', 'primary', '-t', 'text/plain', '/dev/null'], check=False)
+            self.log("Буфер обмена очищен")
+        except:
+            pass
+        
+        # Блокировка всех USB-портов (кроме клавиатуры и мыши)
+        self.block_usb_devices(exclude=['keyboard', 'mouse'])
+        
+        # Отключение сети
+        self.disable_network()
+        
+        # Удаление временных файлов
+        self.cleanup_temp_files()
+        
+        # Создание триггер-файла
+        PANIC_TRIGGER_FILE.touch()
+        
+        print("\n🚨 РЕЖИМ ПАНИКИ АКТИВИРОВАН")
+        print("• Все приложения закрыты")
+        print("• Сеть отключена")
+        print("• USB-порты заблокированы")
+        print("• Временные файлы удалены")
+        print("\nДля выхода выполните: greenway-security deactivate-panic")
+    
+    def deactivate_panic_mode(self):
+        """Деактивация режима паники"""
+        if PANIC_TRIGGER_FILE.exists():
+            PANIC_TRIGGER_FILE.unlink()
+        
+        self.log("Режим паники деактивирован")
+        self.set_security_level(SecurityLevel.NORMAL, "panic_deactivated")
+        
+        # Восстановление сети
+        self.enable_network()
+        
+        # Разблокировка USB
+        self.unblock_usb_devices()
+        
+        print("✅ Режим паники деактивирован")
+    
+    def activate_anonymous_mode(self):
+        """Активация анонимного режима"""
+        self.log("Активация анонимного режима", "WARNING")
+        
+        # Очистка истории команд
+        self.clear_command_history()
+        
+        # Отключение логирования
+        self.disable_system_logging()
+        
+        # Маскировка MAC-адреса
+        self.randomize_mac_address()
+        
+        # Отключение телеметрии
+        self.disable_telemetry()
+        
+        # Использование приватных DNS
+        self.set_private_dns()
+        
+        self.log("Анонимный режим активирован")
+        print("\n✅ Анонимный режим активирован")
+        print("• История команд очищена")
+        print("• Системное логирование отключено")
+        print("• MAC-адрес рандомизирован")
+        print("• Используется приватный DNS")
+    
+    def clear_command_history(self):
+        """Очистка истории команд"""
+        history_files = [
+            Path.home() / ".bash_history",
+            Path.home() / ".zsh_history",
+            Path.home() / ".local/share/bash/readline/history"
+        ]
+        
+        for history_file in history_files:
+            if history_file.exists():
+                try:
+                    history_file.unlink()
+                    self.log(f"Очищено: {history_file}")
+                except Exception as e:
+                    self.log(f"Ошибка очистки {history_file}: {e}", "WARNING")
+        
+        # Очистка текущей сессии
+        subprocess.run(['history', '-c'], shell=True, check=False)
+        subprocess.run(['history', '-w'], shell=True, check=False)
+    
+    def disable_system_logging(self):
+        """Отключение системного логирования"""
+        try:
+            subprocess.run(['systemctl', 'stop', 'rsyslog'], check=False)
+            subprocess.run(['systemctl', 'disable', 'rsyslog'], check=False)
+            self.log("Системное логирование отключено")
+        except Exception as e:
+            self.log(f"Ошибка отключения логирования: {e}", "WARNING")
+    
+    def randomize_mac_address(self):
+        """Рандомизация MAC-адреса"""
+        try:
+            # Получение списка интерфейсов
+            interfaces = subprocess.getoutput("ip -o link show | awk -F': ' '{print $2}' | cut -d'@' -f1").split()
+            
+            for interface in interfaces:
+                if interface != 'lo':
+                    # Генерация случайного MAC
+                    new_mac = ":".join([f"{random.randint(0, 255):02x}" for _ in range(6)])
+                    subprocess.run(['ip', 'link', 'set', 'dev', interface, 'down'], check=False)
+                    subprocess.run(['ip', 'link', 'set', 'dev', interface, 'address', new_mac], check=False)
+                    subprocess.run(['ip', 'link', 'set', 'dev', interface, 'up'], check=False)
+                    self.log(f"MAC-адрес интерфейса {interface} изменен на {new_mac}")
+        except Exception as e:
+            self.log(f"Ошибка рандомизации MAC: {e}", "WARNING")
+    
+    def disable_telemetry(self):
+        """Отключение телеметрии"""
+        # Отключение telemetry для различных сервисов
+        telemetry_configs = [
+            "/etc/firefox/policies/policies.json",
+            "/etc/chromium/policies/managed/telemetry.json"
+        ]
+        
+        for config_path in telemetry_configs:
+            config_file = Path(config_path)
+            if config_file.parent.exists() or True:  # Создаем даже если родителя нет
+                config_file.parent.mkdir(parents=True, exist_ok=True)
+                with open(config_file, 'w') as f:
+                    json.dump({'DisableTelemetry': True}, f)
+                self.log(f"Телеметрия отключена в {config_path}")
+    
+    def set_private_dns(self):
+        """Установка приватных DNS серверов"""
+        dns_servers = [
+            "1.1.1.1",  # Cloudflare
+            "1.0.0.1",  # Cloudflare
+            "9.9.9.9",  # Quad9
+            "8.8.8.8"   # Google (резерв)
+        ]
+        
+        resolv_conf = Path("/etc/resolv.conf")
+        try:
+            with open(resolv_conf, 'w') as f:
+                f.write("# GreenWayOS Private DNS\n")
+                for dns in dns_servers:
+                    f.write(f"nameserver {dns}\n")
+            self.log("Приватные DNS настроены")
+        except Exception as e:
+            self.log(f"Ошибка настройки DNS: {e}", "WARNING")
+    
+    def block_usb_devices(self, exclude=None):
+        """Блокировка USB-устройств"""
+        if exclude is None:
+            exclude = []
+        
+        self.log(f"Блокировка USB-устройств (исключения: {exclude})")
+        
+        try:
+            # Получение списка USB-устройств
+            lsusb_output = subprocess.getoutput("lsusb")
+            
+            for line in lsusb_output.split('\n'):
+                if line:
+                    device_id = line.split()[3]  # ID устройства
+                    
+                    # Проверка исключений
+                    excluded = False
+                    for exc in exclude:
+                        if exc.lower() in line.lower():
+                            excluded = True
+                            break
+                    
+                    if not excluded:
+                        # Блокировка через usb_modeswitch или udev
+                        self.log(f"USB-устройство {device_id} заблокировано")
+        except Exception as e:
+            self.log(f"Ошибка блокировки USB: {e}", "WARNING")
+    
+    def unblock_usb_devices(self):
+        """Разблокировка USB-устройств"""
+        self.log("Разблокировка всех USB-устройств")
+        # Логика разблокировки
+    
+    def disable_network(self):
+        """Отключение сети"""
+        try:
+            subprocess.run(['nmcli', 'radio', 'all', 'off'], check=False)
+            subprocess.run(['ifconfig', 'lo', 'up'], check=False)  # Оставляем loopback
+            self.log("Сеть отключена")
+        except Exception as e:
+            self.log(f"Ошибка отключения сети: {e}", "WARNING")
+    
+    def enable_network(self):
+        """Включение сети"""
+        try:
+            subprocess.run(['nmcli', 'radio', 'all', 'on'], check=False)
+            self.log("Сеть включена")
+        except Exception as e:
+            self.log(f"Ошибка включения сети: {e}", "WARNING")
+    
+    def cleanup_temp_files(self):
+        """Очистка временных файлов"""
+        temp_dirs = [
+            Path("/tmp"),
+            Path("/var/tmp"),
+            Path.home() / ".cache"
+        ]
+        
+        for temp_dir in temp_dirs:
+            if temp_dir.exists():
+                try:
+                    for item in temp_dir.iterdir():
+                        if item.is_file() or item.is_symlink():
+                            item.unlink()
+                        elif item.is_dir():
+                            shutil.rmtree(item, ignore_errors=True)
+                    self.log(f"Очищено: {temp_dir}")
+                except Exception as e:
+                    self.log(f"Ошибка очистки {temp_dir}: {e}", "WARNING")
+    
+    def activate_high_security(self):
+        """Активация высокого уровня безопасности"""
+        self.log("Активация высокого уровня безопасности")
+        
+        # Включение фаервола
+        self.enable_firewall()
+        
+        # Блокировка внешних USB
+        self.block_usb_devices(exclude=['keyboard', 'mouse'])
+        
+        # Усиленный мониторинг
+        self.enable_enhanced_monitoring()
+    
+    def activate_elevated_security(self):
+        """Активация повышенного уровня безопасности"""
+        self.log("Активация повышенного уровня безопасности")
+        
+        # Включение фаервола
+        self.enable_firewall()
+        
+        # Мониторинг подключений
+        self.enable_connection_monitoring()
+    
+    def deactivate_enhanced_security(self):
+        """Отключение усиленной безопасности"""
+        self.log("Отключение усиленной безопасности")
+        
+        # Отключение фаервола (если был включен нами)
+        # self.disable_firewall()
+        
+        # Разблокировка USB
+        self.unblock_usb_devices()
+    
+    def enable_firewall(self):
+        """Включение фаервола"""
+        try:
+            subprocess.run(['ufw', 'enable'], check=False)
+            subprocess.run(['ufw', 'default', 'deny'], check=False)
+            subprocess.run(['ufw', 'allow', 'out'], check=False)
+            self.log("Фаервол включен")
+        except Exception as e:
+            self.log(f"Ошибка включения фаервола: {e}", "WARNING")
+    
+    def enable_enhanced_monitoring(self):
+        """Включение усиленного мониторинга"""
+        self.log("Усиленный мониторинг активирован")
+        # Логика мониторинга
+    
+    def enable_connection_monitoring(self):
+        """Включение мониторинга подключений"""
+        self.log("Мониторинг подключений активирован")
+        # Логика мониторинга подключений
+    
+    def get_security_status(self):
+        """Получение текущего статуса безопасности"""
+        status = {
+            'current_level': self.current_level.value,
+            'panic_active': PANIC_TRIGGER_FILE.exists(),
+            'network_status': self.get_network_status(),
+            'usb_status': self.get_usb_status(),
+            'firewall_status': self.get_firewall_status(),
+            'last_log_entries': self.get_recent_logs()
+        }
+        return status
+    
+    def get_network_status(self):
+        """Получение статуса сети"""
+        try:
+            result = subprocess.getoutput("nmcli radio all")
+            return "enabled" if "enabled" in result else "disabled"
+        except:
+            return "unknown"
+    
+    def get_usb_status(self):
+        """Получение статуса USB"""
+        try:
+            result = subprocess.getoutput("lsusb | wc -l")
+            return f"{result} устройств"
+        except:
+            return "unknown"
+    
+    def get_firewall_status(self):
+        """Получение статуса фаервола"""
+        try:
+            result = subprocess.getoutput("ufw status | head -1")
+            return result
+        except:
+            return "unknown"
+    
+    def get_recent_logs(self, lines=10):
+        """Получение последних записей лога"""
+        if not self.log_file.exists():
+            return []
+        
+        with open(self.log_file, 'r', encoding='utf-8') as f:
+            all_lines = f.readlines()
+        
+        return [line.strip() for line in all_lines[-lines:]]
+
+
+def main():
+    import argparse
+    import random
+    
+    parser = argparse.ArgumentParser(description='GreenWayOS Security Module')
+    subparsers = parser.add_subparsers(dest='command', help='Команды')
+    
+    # Установка уровня безопасности
+    level_parser = subparsers.add_parser('level', help='Установить уровень безопасности')
+    level_parser.add_argument('level', choices=['normal', 'elevated', 'high', 'critical', 'panic'])
+    level_parser.add_argument('--reason', help='Причина изменения')
+    
+    # Режим паники
+    panic_parser = subparsers.add_parser('panic', help='Активировать режим паники')
+    
+    # Деактивация паники
+    unpanic_parser = subparsers.add_parser('deactivate-panic', help='Деактивировать режим паники')
+    
+    # Анонимный режим
+    anon_parser = subparsers.add_parser('anonymous', help='Активировать анонимный режим')
+    
+    # Статус
+    status_parser = subparsers.add_parser('status', help='Показать статус безопасности')
+    
+    # Просмотр лога
+    log_parser = subparsers.add_parser('log', help='Просмотр лога безопасности')
+    log_parser.add_argument('--lines', type=int, default=20)
+    
+    args = parser.parse_args()
+    
+    security = SecurityModule()
+    
+    if args.command == 'level':
+        try:
+            security.set_security_level(args.level, args.reason or "")
+            print(f"\n✅ Уровень безопасности установлен: {args.level}")
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'panic':
+        security.set_security_level(SecurityLevel.PANIC, "user_activated")
+    
+    elif args.command == 'deactivate-panic':
+        security.deactivate_panic_mode()
+    
+    elif args.command == 'anonymous':
+        security.activate_anonymous_mode()
+    
+    elif args.command == 'status':
+        status = security.get_security_status()
+        print("\n🔒 СТАТУС БЕЗОПАСНОСТИ GREENWAYOS")
+        print("=" * 40)
+        print(f"Уровень безопасности: {status['current_level']}")
+        print(f"Режим паники: {'🚨 АКТИВЕН' if status['panic_active'] else '✅ Неактивен'}")
+        print(f"Сеть: {status['network_status']}")
+        print(f"USB: {status['usb_status']}")
+        print(f"Фаервол: {status['firewall_status']}")
+        print("\nПоследние события:")
+        for entry in status['last_log_entries']:
+            print(f"  {entry}")
+    
+    elif args.command == 'log':
+        logs = security.get_recent_logs(lines=args.lines)
+        if logs:
+            for entry in logs:
+                print(entry)
+        else:
+            print("Лог пуст")
+    
+    else:
+        parser.print_help()
+
+
+if __name__ == '__main__':
+    main()

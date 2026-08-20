@@ -1,0 +1,10 @@
+#!/bin/sh
+# Wrapper: prefer ctOS HUD, fall back to legacy tk welcome.
+if [ -x /usr/local/bin/greenwayos-ctos-hud ]; then
+  exec /usr/local/bin/greenwayos-ctos-hud "$@"
+fi
+if [ -x /usr/local/bin/greenwayos-welcome-legacy ]; then
+  exec /usr/local/bin/greenwayos-welcome-legacy "$@"
+fi
+echo "GreenWayOS welcome UI not found" >&2
+exit 1

@@ -1,0 +1,43 @@
+# GreenWayOS ctOS — installed-system GRUB theme
+# Colors match Live HUD (cyan on dark)
+
+desktop-color: "#0A0E12"
+desktop-image: "background.png"
+title-text: "GreenWayOS // NODE"
+title-font: "DejaVu Sans Bold 16"
+title-color: "#00E8FF"
+message-font: "DejaVu Sans 12"
+message-color: "#1DB954"
+terminal-font: "DejaVu Sans Mono 12"
+terminal-left: "0%"
+terminal-top: "0%"
+terminal-width: "100%"
+terminal-height: "100%"
+terminal-border: "0"
+
++ boot_menu {
+  left = 12%
+  width = 76%
+  top = 28%
+  height = 48%
+  item_font = "DejaVu Sans 14"
+  item_color = "#7A8B9A"
+  selected_item_font = "DejaVu Sans Bold 14"
+  selected_item_color = "#00E8FF"
+  item_height = 32
+  item_padding = 10
+  item_spacing = 6
+  item_icon_space = 0
+  scrollbar = false
+}
+
++ label {
+  id = "__timeout__"
+  left = 12%
+  top = 82%
+  width = 76%
+  align = "center"
+  font = "DejaVu Sans 12"
+  color = "#1DB954"
+  text = "AUTO-BOOT // %d"
+}

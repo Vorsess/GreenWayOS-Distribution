@@ -1,0 +1,168 @@
+/* GreenWayOS ctOS — GTK3 theme */
+@define-color bg_color #0A0E12;
+@define-color panel_color #0D1117;
+@define-color surface_color #12181F;
+@define-color border_color #1C2A33;
+@define-color cyan #00E8FF;
+@define-color green #1DB954;
+@define-color text_color #E6F1FF;
+@define-color muted_color #7A8B9A;
+@define-color danger #FF4D6A;
+
+* {
+  color: @text_color;
+  font-family: "JetBrains Mono", "DejaVu Sans Mono", monospace;
+}
+
+window, dialog, .background {
+  background-color: @bg_color;
+  color: @text_color;
+}
+
+headerbar, .titlebar {
+  background-color: @panel_color;
+  border-bottom: 1px solid @cyan;
+  box-shadow: none;
+  min-height: 28px;
+}
+
+headerbar button, button {
+  background-image: none;
+  background-color: @surface_color;
+  border: 1px solid @border_color;
+  border-radius: 0;
+  color: @text_color;
+  padding: 4px 10px;
+}
+
+button:hover {
+  border-color: @cyan;
+  color: @cyan;
+}
+
+button:active, button.suggested-action {
+  background-color: alpha(@cyan, 0.15);
+  border-color: @cyan;
+  color: @cyan;
+}
+
+entry, spinbutton, searchentry {
+  background-color: @surface_color;
+  border: 1px solid @border_color;
+  border-radius: 0;
+  color: @text_color;
+  caret-color: @cyan;
+}
+
+entry:focus {
+  border-color: @cyan;
+}
+
+notebook tab {
+  background-color: @panel_color;
+  border: 1px solid @border_color;
+  padding: 4px 8px;
+}
+
+notebook tab:checked {
+  border-bottom: 2px solid @cyan;
+  color: @cyan;
+}
+
+scrollbar slider {
+  background-color: @border_color;
+  border-radius: 0;
+  min-width: 8px;
+}
+
+scrollbar slider:hover {
+  background-color: @cyan;
+}
+
+menubar, menu, .menubar {
+  background-color: @panel_color;
+  border: 1px solid @border_color;
+}
+
+menuitem:hover {
+  background-color: alpha(@cyan, 0.12);
+  color: @cyan;
+}
+
+treeview, list, .view {
+  background-color: @bg_color;
+  color: @text_color;
+}
+
+treeview:selected, .view:selected {
+  background-color: alpha(@green, 0.25);
+  color: @green;
+}
+
+progressbar trough {
+  background-color: @surface_color;
+  border: 1px solid @border_color;
+}
+
+progressbar progress {
+  background-color: @cyan;
+}
+
+/* Volume / brightness sliders (xfce4-pulseaudio-plugin popup) */
+scale {
+  min-height: 22px;
+  padding: 4px 0;
+}
+
+scale trough {
+  background-color: @surface_color;
+  border: 1px solid @border_color;
+  border-radius: 0;
+  min-height: 8px;
+  min-width: 8px;
+}
+
+scale highlight {
+  background-color: @cyan;
+  border-radius: 0;
+}
+
+scale slider {
+  background-color: @cyan;
+  border: 1px solid @text_color;
+  border-radius: 0;
+  min-width: 14px;
+  min-height: 14px;
+  margin: -4px;
+}
+
+scale slider:hover {
+  background-color: @green;
+  border-color: @green;
+}
+
+scale:disabled trough,
+scale:disabled highlight,
+scale:disabled slider {
+  opacity: 0.4;
+}
+
+tooltip {
+  background-color: @panel_color;
+  border: 1px solid @cyan;
+  color: @text_color;
+}
+
+separator {
+  background-color: @border_color;
+}
+
+.check, .radio {
+  border: 1px solid @border_color;
+  background-color: @surface_color;
+}
+
+.check:checked, .radio:checked {
+  background-color: @cyan;
+  border-color: @cyan;
+}

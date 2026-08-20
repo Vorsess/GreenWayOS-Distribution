@@ -1,0 +1,3 @@
+#!/bin/sh
+# live-config hook: keep installer flags in sync (early unit also sets them).
+exec /usr/local/bin/greenwayos-set-install-flags.sh

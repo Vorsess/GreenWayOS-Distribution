@@ -1,0 +1,17 @@
+#!/bin/bash
+# chroot hook: Remove Debian branding
+set -e
+
+echo "[GreenWayOS] Removing Debian branding..."
+
+# Purge desktop-base if it was pulled in (it replaces wallpapers and themes)
+apt-get purge -y desktop-base 2>/dev/null || true
+
+# Explicitly remove all Debian-themed background/plymouth assets
+rm -rf /usr/share/images/desktop-base \
+       /usr/share/desktop-base \
+       /usr/share/plymouth/themes/joy \
+       /usr/share/plymouth/themes/lines \
+       /usr/share/plymouth/themes/homeworld
+
+echo "[GreenWayOS] Debian branding removed."

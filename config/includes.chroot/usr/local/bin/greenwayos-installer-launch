@@ -1,0 +1,23 @@
+#!/bin/bash
+# Start text installer on tty1 (systemd) or via openvt (manual / broken tty).
+set -eu
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+if [ -x /usr/local/bin/greenwayos-setup-install-console.sh ]; then
+  /usr/local/bin/greenwayos-setup-install-console.sh
+fi
+
+# systemd text unit binds a real TTY — run directly (do not nest openvt).
+if { [ -n "${INVOCATION_ID:-}" ] || [ -n "${JOURNAL_STREAM:-}" ]; } \
+   && [ -t 0 ] && [ -t 1 ]; then
+  exec /usr/local/bin/greenwayos-installer
+fi
+
+# Manual / GUI-fallback path: need a real Linux VT for curses
+export GREENWAYOS_INSTALLER_VIA_OPENVT=1
+if command -v openvt >/dev/null 2>&1; then
+  exec openvt -f -s -w -c 1 -- /usr/local/bin/greenwayos-installer
+fi
+
+exec /usr/local/bin/greenwayos-installer

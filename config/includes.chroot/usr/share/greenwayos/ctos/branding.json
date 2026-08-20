@@ -1,0 +1,33 @@
+{
+  "name": "GreenWayOS ctOS",
+  "edition": "HUD",
+  "version": "2.0-rc1",
+  "colors": {
+    "bg": "#0A0E12",
+    "panel": "#0D1117",
+    "surface": "#12181F",
+    "border": "#1C2A33",
+    "cyan": "#00E8FF",
+    "green": "#1DB954",
+    "text": "#E6F1FF",
+    "muted": "#7A8B9A",
+    "danger": "#FF4D6A",
+    "warn": "#FFB020"
+  },
+  "strings": {
+    "boot_ok": "SYSTEM ONLINE",
+    "node_link": "NODE LINK",
+    "install": "INSTALL PROTOCOL",
+    "live": "LIVE NODE",
+    "apps": "APPS //",
+    "status": "STATUS"
+  },
+  "theme": {
+    "gtk": "GreenWay-ctOS",
+    "xfwm": "GreenWay-ctOS",
+    "wallpaper": "/usr/share/greenwayos/ctos/wallpaper.png",
+    "wallpaper_lock": "/usr/share/greenwayos/ctos/wallpaper-lock.png",
+    "font_ui": "JetBrains Mono",
+    "font_fallback": "DejaVu Sans Mono"
+  }
+}

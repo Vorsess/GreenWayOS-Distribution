@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+TS="$(date +%Y%m%d-%H%M%S)"
+OUT_DIR="/var/log/greenwayos-session-logs"
+OUT_BASE="greenwayos-session-${TS}"
+WORK_DIR="${OUT_DIR}/${OUT_BASE}"
+ARCHIVE="${OUT_DIR}/${OUT_BASE}.tar.gz"
+
+mkdir -p "${WORK_DIR}"
+
+safe_dump() {
+  local name="$1"
+  shift
+  if "$@" > "${WORK_DIR}/${name}" 2>&1; then
+    :
+  else
+    echo "[warn] command failed: $*" >> "${WORK_DIR}/_errors.log"
+  fi
+}
+
+# Core environment
+safe_dump "uname.txt" uname -a
+safe_dump "cmdline.txt" cat /proc/cmdline
+safe_dump "os-release.txt" cat /etc/os-release
+safe_dump "mount.txt" mount
+safe_dump "lsblk.txt" lsblk -f
+safe_dump "df.txt" df -h
+safe_dump "ip-a.txt" ip a
+safe_dump "ip-r.txt" ip r
+
+# Kernel / boot
+safe_dump "dmesg.txt" dmesg -T
+safe_dump "journal-boot.txt" journalctl -b --no-pager
+safe_dump "journal-kernel.txt" journalctl -k -b --no-pager
+safe_dump "systemd-failed.txt" systemctl --failed --no-pager
+safe_dump "systemd-units.txt" systemctl list-units --no-pager
+
+# Installer / app logs (if present)
+for f in \
+  /var/log/greenwayos-welcome.log \
+  /var/log/greenwayos-install.log \
+  /var/log/greenwayos-firstboot.log \
+  /var/log/boot.log; do
+  if [[ -f "$f" ]]; then
+    cp -f "$f" "${WORK_DIR}/$(basename "$f")" || true
+  fi
+done
+
+tar -C "${OUT_DIR}" -czf "${ARCHIVE}" "${OUT_BASE}"
+echo "${ARCHIVE}"
+
+# Best effort: also place archive somewhere user can easily grab.
+if [[ -d /home/user ]]; then
+  cp -f "${ARCHIVE}" "/home/user/${OUT_BASE}.tar.gz" 2>/dev/null || true
+fi
+if [[ -w /run/live/medium ]]; then
+  cp -f "${ARCHIVE}" "/run/live/medium/${OUT_BASE}.tar.gz" 2>/dev/null || true
+fi
+
+exit 0
+

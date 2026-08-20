@@ -1,0 +1,211 @@
+#!/bin/bash
+# chroot hook: compile sys-dashboard and configure the live environment
+set -euo pipefail
+
+# ── Error handling ─────────────────────────────────────────────────
+trap 'echo "[ERROR] Hook failed at line $LINENO"; exit 1' ERR
+
+# ── Logging functions ──────────────────────────────────────────────
+log_success() { echo "[✓] $*"; }
+log_warn()    { echo "[⚠] WARNING: $*" >&2; }
+log_error()   { echo "[✗] ERROR: $*" >&2; }
+
+# ══════════════════════════════════════════════════════════════════════
+
+log_success "Compiling sys-dashboard..."
+if ! gcc -O2 -Wall -Wextra -o /usr/local/bin/sys-dashboard /usr/local/src/sys-dashboard.c; then
+    log_error "GCC compilation failed"
+    exit 1
+fi
+
+if ! chmod +x /usr/local/bin/sys-dashboard; then
+    log_error "Failed to make sys-dashboard executable"
+    exit 1
+fi
+log_success "sys-dashboard compiled successfully"
+
+# ── Installer dependencies (build-time gate) ─────────────────────────
+log_success "Verifying installer dependencies..."
+for cmd in debootstrap xset Xorg xauth dbus-launch chvt openvt; do
+    if command -v "$cmd" >/dev/null 2>&1; then
+        log_success "  ✓ $cmd"
+    else
+        log_error "Missing required tool: $cmd (check package lists)"
+        exit 1
+    fi
+done
+if python3 -c "
+from PyQt5.QtWidgets import QApplication
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont
+" 2>/dev/null; then
+    log_success "  ✓ python3-pyqt5"
+else
+    log_error "PyQt5 missing or broken — add python3-pyqt5 to base.list.chroot"
+    exit 1
+fi
+if python3 -c "import curses" 2>/dev/null; then
+    log_success "  ✓ python3 curses"
+else
+    log_error "python3 curses module missing"
+    exit 1
+fi
+if python3 -m py_compile /usr/local/bin/greenwayos-installer-gui 2>/dev/null; then
+    log_success "  ✓ greenwayos-installer-gui syntax"
+else
+    log_error "greenwayos-installer-gui has Python syntax errors"
+    exit 1
+fi
+if python3 -m py_compile /usr/local/bin/greenwayos-installer 2>/dev/null; then
+    log_success "  ✓ greenwayos-installer syntax"
+else
+    log_error "greenwayos-installer has Python syntax errors"
+    exit 1
+fi
+if command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -f >/dev/null 2>&1 && log_success "  ✓ fontconfig cache built" || log_warn "  ⚠ fc-cache failed"
+else
+    log_warn "  ⚠ fontconfig (fc-cache) not found"
+fi
+for xfpkg in xfonts-base; do
+    dpkg -l "$xfpkg" >/dev/null 2>&1 && log_success "  ✓ ${xfpkg}" || log_error "Missing ${xfpkg} (Xorg InitFonts may segfault)"
+done
+
+if [ -f /usr/local/lib/greenwayos/install/chroot-apt.sh ]; then
+    chmod +x /usr/local/lib/greenwayos/install/chroot-apt.sh
+    log_success "  ✓ chroot-apt.sh executable"
+else
+    log_error "Missing /usr/local/lib/greenwayos/install/chroot-apt.sh"
+    exit 1
+fi
+
+if PYTHONPATH=/usr/local/lib/greenwayos python3 -c "from install.engine import install_system" 2>/dev/null; then
+    log_success "  ✓ shared install backend (install.engine)"
+else
+    log_error "Cannot import install.engine from /usr/local/lib/greenwayos"
+    exit 1
+fi
+
+# Installer flags script + live-config hook
+for f in /usr/local/bin/greenwayos-set-install-flags.sh /lib/live/config/0100-greenwayos-install-mode /lib/live/config/0110-greenwayos-install-login; do
+    if [ -f "$f" ]; then
+        chmod +x "$f" && log_success "  ✓ $(basename "$f") executable"
+    else
+        log_error "Missing $f"
+        exit 1
+    fi
+done
+
+# Locales used by installers (avoid PyQt5/curses warnings on live boot)
+if grep -q '^ru_RU.UTF-8 UTF-8' /etc/locale.gen 2>/dev/null || \
+   echo 'ru_RU.UTF-8 UTF-8' >> /etc/locale.gen; then
+    if locale-gen ru_RU.UTF-8 >/dev/null 2>&1; then
+        log_success "  ✓ locale ru_RU.UTF-8 generated"
+    else
+        log_warn "  ⚠ locale-gen ru_RU.UTF-8 failed (installers use C.UTF-8)"
+    fi
+fi
+for f in /usr/local/bin/greenwayos-gui-x-fallback.sh /usr/local/bin/greenwayos-start-x-installer.sh /usr/local/bin/greenwayos-set-install-flags.sh /usr/local/bin/greenwayos-installer-launch /usr/local/bin/greenwayos-install-banner.sh /usr/local/bin/greenwayos-live-chvt.sh /usr/local/bin/greenwayos-setup-install-console.sh; do
+    if [ -f "$f" ]; then
+        chmod +x "$f" && log_success "  ✓ $(basename "$f") executable"
+    fi
+done
+
+# ── Set file permissions ────────────────────────────────────────────
+log_success "Setting file permissions..."
+for cmd in greenwayos-installer greenwayos-installer-gui greenwayos-installer-launch greenwayos-start-x-installer.sh greenwayos-about greenwayos-firstboot greenwayos-welcome greenwayos-ctos-hud greenwayos-welcome-legacy neofetch greenwayos-save-logs; do
+    if [ -f "/usr/local/bin/$cmd" ]; then
+        if chmod +x "/usr/local/bin/$cmd"; then
+            log_success "  ✓ $cmd"
+        else
+            log_warn "  ⚠ Failed to chmod $cmd"
+        fi
+    else
+        log_warn "  ✗ $cmd not found"
+    fi
+done
+
+# ── System services ────────────────────────────────────────────────
+log_success "Enabling system services..."
+if systemctl enable greenwayos-install-flags.service 2>/dev/null; then
+    log_success "  ✓ greenwayos-install-flags.service enabled"
+else
+    log_warn "  ⚠ Failed to enable install-flags service"
+fi
+
+if systemctl enable greenwayos-install-banner.service 2>/dev/null; then
+    log_success "  ✓ greenwayos-install-banner.service enabled"
+else
+    log_warn "  ⚠ Failed to enable install-banner service"
+fi
+
+if systemctl enable greenwayos-gui-install.service 2>/dev/null; then
+    log_success "  ✓ greenwayos-gui-install.service enabled"
+else
+    log_warn "  ⚠ Failed to enable gui-install service"
+fi
+
+if systemctl enable greenwayos-text-install.service 2>/dev/null; then
+    log_success "  ✓ greenwayos-text-install.service enabled"
+else
+    log_warn "  ⚠ Failed to enable text-install service"
+fi
+
+if systemctl enable greenwayos-logdump.service 2>/dev/null; then
+    log_success "  ✓ greenwayos-logdump.service enabled"
+else
+    log_warn "  ⚠ Failed to enable logdump service"
+fi
+
+# Wi-Fi / Ethernet for installers (nmcli)
+if systemctl enable NetworkManager.service 2>/dev/null; then
+    log_success "  ✓ NetworkManager.service enabled"
+else
+    log_warn "  ⚠ Failed to enable NetworkManager (Wi-Fi in installer may be unavailable)"
+fi
+
+if systemctl disable bluetooth 2>/dev/null; then
+    log_success "  ✓ bluetooth disabled"
+else
+    log_warn "  ⚠ bluetooth not available"
+fi
+
+if systemctl disable cups 2>/dev/null; then
+    log_success "  ✓ cups disabled"
+else
+    log_warn "  ⚠ cups not available"
+fi
+
+# ── Hostname configuration ────────────────────────────────────────
+log_success "Configuring hostname..."
+if echo "greenwayos" > /etc/hostname; then
+    log_success "  ✓ Hostname set"
+else
+    log_error "Failed to set hostname"
+    exit 1
+fi
+
+if cat > /etc/hosts << 'EOF'
+127.0.0.1   localhost
+127.0.1.1   greenwayos
+::1         localhost ip6-localhost ip6-loopback
+EOF
+then
+    log_success "  ✓ /etc/hosts configured"
+else
+    log_error "Failed to configure /etc/hosts"
+    exit 1
+fi
+
+# ── Sudoers permissions ───────────────────────────────────────────
+if [ -f /etc/sudoers.d/greenwayos-nopasswd ]; then
+    if chmod 440 /etc/sudoers.d/greenwayos-nopasswd; then
+        log_success "  ✓ sudoers permissions set"
+    else
+        log_warn "  ⚠ Failed to set sudoers permissions"
+    fi
+else
+    log_warn "  ⚠ /etc/sudoers.d/greenwayos-nopasswd not found"
+fi
+
+log_success "01-setup completed successfully"

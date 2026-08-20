@@ -1,0 +1,1125 @@
+#!/usr/bin/env python3
+"""
+GreenWayOS Installer
+A curses-based TUI installer for GreenWayOS 1.0
+"""
+
+import curses
+import os
+import sys
+import subprocess
+import time
+import threading
+import locale
+import shlex
+import re
+import logging
+import tempfile
+import stat
+import shutil
+
+# ── Setup logging ──────────────────────────────────────────────────
+def setup_logging():
+    """Installer logger (file handler shared with install.engine via logutil)."""
+    os.makedirs('/var/log', exist_ok=True)
+    log = logging.getLogger('greenwayos-installer')
+    if not log.handlers:
+        log.setLevel(logging.DEBUG)
+        fmt = logging.Formatter(
+            '%(asctime)s [%(levelname)s] %(message)s',
+            datefmt='%Y-%m-%d %H:%M:%S',
+        )
+        fh = logging.FileHandler('/var/log/greenwayos-install.log')
+        fh.setFormatter(fmt)
+        log.addHandler(fh)
+        log.propagate = False
+    log.info("=== GreenWayOS Installer Started ===")
+    return log
+
+logger = setup_logging()
+
+_INSTALL_ROOT = "/usr/local/lib/greenwayos"
+if os.path.isdir(_INSTALL_ROOT) and _INSTALL_ROOT not in sys.path:
+    sys.path.insert(0, _INSTALL_ROOT)
+
+from install.constants import EXPERT_PROFILES  # noqa: E402
+from install.disk import (  # noqa: E402
+    assess_dualboot,
+    check_disk_space,
+    detect_boot_mode,
+    get_disks,
+    get_live_boot_disk,
+)
+from install.engine import install_system, run_command_live, cleanup_install_mounts  # noqa: E402
+from install.network import (  # noqa: E402
+    check_internet,
+    connect_wifi,
+    network_status_summary,
+    scan_wifi,
+)
+
+logger.info("Expert profiles loaded: %s", list(EXPERT_PROFILES.keys()))
+
+# ── Colour pairs ──────────────────────────────────────────────────
+C_NORMAL   = 1
+C_TITLE    = 2
+C_SELECT   = 3
+C_BORDER   = 4
+C_SUCCESS  = 5
+C_ERROR    = 6
+C_DIM      = 7
+C_WARN     = 8
+
+HOSTNAME_RE = re.compile(r"^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?$")
+USERNAME_RE = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+MIN_ROWS = 24
+MIN_COLS = 80
+PREFERRED_ROWS = 30
+PREFERRED_COLS = 100
+
+def is_valid_hostname(value):
+    if len(value) > 253:
+        return False
+    return all(HOSTNAME_RE.match(label) for label in value.split("."))
+
+def init_colours():
+    curses.start_color()
+    curses.use_default_colors()
+    curses.init_pair(C_NORMAL,  curses.COLOR_WHITE,   curses.COLOR_BLACK)
+    curses.init_pair(C_TITLE,   curses.COLOR_BLACK,   curses.COLOR_CYAN)
+    curses.init_pair(C_SELECT,  curses.COLOR_BLACK,   curses.COLOR_CYAN)
+    curses.init_pair(C_BORDER,  curses.COLOR_CYAN,    curses.COLOR_BLACK)
+    curses.init_pair(C_SUCCESS, curses.COLOR_GREEN,   curses.COLOR_BLACK)
+    curses.init_pair(C_ERROR,   curses.COLOR_RED,     curses.COLOR_BLACK)
+    curses.init_pair(C_DIM,     curses.COLOR_WHITE,   curses.COLOR_BLACK)
+    curses.init_pair(C_WARN,    curses.COLOR_YELLOW,  curses.COLOR_BLACK)
+
+def ensure_min_screen(win):
+    rows, cols = win.getmaxyx()
+    if rows >= MIN_ROWS and cols >= MIN_COLS:
+        return True
+    win.clear()
+    msg1 = f"Terminal is too small ({cols}x{rows})."
+    msg2 = f"Resize to at least {MIN_COLS}x{MIN_ROWS}."
+    msg3 = "Press Q to exit or resize the window."
+    try:
+        win.attron(curses.color_pair(C_WARN) | curses.A_BOLD)
+        win.addstr(max(1, rows // 2 - 1), max(1, (cols - len(msg1)) // 2), msg1[:max(1, cols - 2)])
+        win.addstr(max(1, rows // 2), max(1, (cols - len(msg2)) // 2), msg2[:max(1, cols - 2)])
+        win.attroff(curses.color_pair(C_WARN) | curses.A_BOLD)
+        win.attron(curses.color_pair(C_DIM) | curses.A_DIM)
+        win.addstr(max(1, rows // 2 + 2), max(1, (cols - len(msg3)) // 2), msg3[:max(1, cols - 2)])
+        win.attroff(curses.color_pair(C_DIM) | curses.A_DIM)
+    except curses.error:
+        pass
+    win.refresh()
+    while True:
+        key = win.getch()
+        if key in (ord("q"), ord("Q")):
+            return False
+        if key == curses.KEY_RESIZE:
+            rows, cols = win.getmaxyx()
+            if rows >= MIN_ROWS and cols >= MIN_COLS:
+                return True
+
+# ── Drawing helpers ───────────────────────────────────────────────
+
+def draw_box(win, y, x, h, w, title=""):
+    """Draw a border box (ASCII — portable on linux tty / VMware console)."""
+    if w < 4 or h < 3:
+        return
+    attr = curses.color_pair(C_BORDER) | curses.A_BOLD
+    try:
+        win.attron(attr)
+        win.addch(y, x, ord('+'))
+        win.addch(y, x + w - 1, ord('+'))
+        win.addch(y + h - 1, x, ord('+'))
+        win.addch(y + h - 1, x + w - 1, ord('+'))
+        win.hline(y, x + 1, ord('-'), w - 2)
+        win.hline(y + h - 1, x + 1, ord('-'), w - 2)
+        for i in range(1, h - 1):
+            win.addch(y + i, x, ord('|'))
+            win.addch(y + i, x + w - 1, ord('|'))
+        win.attroff(attr)
+        if title:
+            label = f"  {title}  "
+            tx = x + (w - len(label)) // 2
+            win.attron(curses.color_pair(C_TITLE) | curses.A_BOLD)
+            win.addstr(y, tx, label)
+            win.attroff(curses.color_pair(C_TITLE) | curses.A_BOLD)
+    except curses.error:
+        pass
+
+def setup_terminal():
+    """Best-effort console setup before curses (resolution, less kernel spam)."""
+    script = "/usr/local/bin/greenwayos-setup-install-console.sh"
+    if os.path.isfile(script) and os.access(script, os.X_OK):
+        try:
+            subprocess.run([script], check=False, timeout=10)
+        except Exception:
+            pass
+    else:
+        subprocess.run(["dmesg", "-n", "3"], check=False, capture_output=True)
+
+
+def draw_header(win, rows, cols, compact=None):
+    if compact is None:
+        compact = cols < 95 or rows < 28
+    if compact:
+        title = " GREENWAYOS // ctOS "
+        sub = "INSTALL PROTOCOL v2.0"
+        try:
+            win.attron(curses.color_pair(C_TITLE) | curses.A_BOLD)
+            win.addstr(1, max(0, (cols - len(title)) // 2), title[:cols - 1])
+            win.attroff(curses.color_pair(C_TITLE) | curses.A_BOLD)
+            win.attron(curses.color_pair(C_DIM) | curses.A_DIM)
+            win.addstr(2, max(0, (cols - len(sub)) // 2), sub[:cols - 1])
+            win.attroff(curses.color_pair(C_DIM) | curses.A_DIM)
+            win.hline(3, 0, curses.ACS_HLINE, cols)
+        except curses.error:
+            pass
+        return 4
+    logo = [
+        " ╔══════════════════════════════════════════════════════════╗",
+        " ║   GREENWAYOS  //  ctOS HUD          INSTALL PROTOCOL     ║",
+        " ║   NODE LINK · SYSTEM INSTALLER v2.0 · BOOKWORM TARGET    ║",
+        " ╚══════════════════════════════════════════════════════════╝",
+    ]
+    attr = curses.color_pair(C_BORDER) | curses.A_BOLD
+    for i, line in enumerate(logo):
+        cx = max(0, (cols - len(line)) // 2)
+        try:
+            win.attron(attr)
+            win.addstr(1 + i, cx, line[: max(0, cols - cx - 1)])
+            win.attroff(attr)
+        except curses.error:
+            pass
+    sub = "TTY INSTALL  ·  ALL DATA ON SELECTED DISK WILL BE ERASED"
+    try:
+        win.attron(curses.color_pair(C_DIM) | curses.A_DIM)
+        win.addstr(6, max(0, (cols - len(sub)) // 2), sub[:cols - 1])
+        win.attroff(curses.color_pair(C_DIM) | curses.A_DIM)
+    except curses.error:
+        pass
+    return 8
+
+def draw_footer(win, rows, cols, hint="[↑↓] Navigate    [Enter] Select    [Q] Quit"):
+    try:
+        win.attron(curses.color_pair(C_BORDER) | curses.A_BOLD)
+        win.hline(rows - 2, 0, curses.ACS_HLINE, cols)
+        win.attroff(curses.color_pair(C_BORDER) | curses.A_BOLD)
+        win.attron(curses.color_pair(C_DIM) | curses.A_DIM)
+        win.addstr(rows - 1, (cols - len(hint)) // 2, hint[:cols - 1])
+        win.attroff(curses.color_pair(C_DIM) | curses.A_DIM)
+    except curses.error:
+        pass
+
+def draw_progress_bar(win, y, x, w, pct, label=""):
+    filled = int(w * pct / 100)
+    bar = "#" * filled + "." * (w - filled)
+    try:
+        win.attron(curses.color_pair(C_BORDER) | curses.A_BOLD)
+        win.addstr(y, x, bar[:w])
+        win.attroff(curses.color_pair(C_BORDER) | curses.A_BOLD)
+        pct_str = f" {pct:3d}%"
+        win.attron(curses.color_pair(C_NORMAL))
+        win.addstr(y, x + w + 1, pct_str)
+        if label:
+            parts = label.split(" · ", 2)
+            win.addstr(y + 1, x, parts[0][:w])
+            if len(parts) > 1:
+                win.attron(curses.color_pair(C_DIM) | curses.A_DIM)
+                win.addstr(y + 2, x, (" · ".join(parts[1:]))[:w])
+                win.attroff(curses.color_pair(C_DIM) | curses.A_DIM)
+        win.attroff(curses.color_pair(C_NORMAL))
+    except curses.error:
+        pass
+
+# ── Menu widget ───────────────────────────────────────────────────
+
+def menu_select(win, items, title, y0, x0, w):
+    """Show a scrollable menu. Returns selected index or -1 on cancel."""
+    selected = 0
+    while True:
+        h = len(items) + 4
+        draw_box(win, y0, x0, h, w, title)
+        for i, item in enumerate(items):
+            text = f"  {item}"
+            text = text[:w - 4].ljust(w - 4)
+            try:
+                if i == selected:
+                    win.attron(curses.color_pair(C_SELECT) | curses.A_BOLD)
+                    win.addstr(y0 + 2 + i, x0 + 2, text)
+                    win.attroff(curses.color_pair(C_SELECT) | curses.A_BOLD)
+                else:
+                    win.attron(curses.color_pair(C_NORMAL))
+                    win.addstr(y0 + 2 + i, x0 + 2, text)
+                    win.attroff(curses.color_pair(C_NORMAL))
+            except curses.error:
+                pass
+        win.refresh()
+        key = win.getch()
+        if key in (curses.KEY_UP, ord('k')) and selected > 0:
+            selected -= 1
+        elif key in (curses.KEY_DOWN, ord('j')) and selected < len(items) - 1:
+            selected += 1
+        elif key in (curses.KEY_ENTER, 10, 13):
+            return selected
+        elif key in (ord('q'), ord('Q'), 27):
+            return -1
+
+def input_field(win, prompt, y, x, max_len=32, secret=False, timeout=180, allow_cancel=False):
+    """Single-line input field with inactivity timeout. Returns None if Esc cancels."""
+    curses.curs_set(1)
+    win.timeout(1000)  # 1-second getch timeout
+    try:
+        win.attron(curses.color_pair(C_WARN) | curses.A_BOLD)
+        win.addstr(y, x, prompt)
+        win.attroff(curses.color_pair(C_WARN) | curses.A_BOLD)
+    except curses.error:
+        pass
+    value = ""
+    px = x + len(prompt)
+    elapsed_secs = 0
+    while elapsed_secs < timeout:
+        try:
+            display = "*" * len(value) if secret else value
+            win.addstr(y, px, display.ljust(max_len))
+        except curses.error:
+            pass
+        win.move(y, px + len(value))
+        win.refresh()
+        key = win.getch()
+        if key == -1:
+            elapsed_secs += 1
+            continue
+        elapsed_secs = 0
+        if key in (curses.KEY_ENTER, 10, 13):
+            break
+        elif key in (curses.KEY_BACKSPACE, 127, 8):
+            value = value[:-1]
+        elif allow_cancel and key == 27:
+            curses.curs_set(0)
+            win.timeout(-1)
+            return None
+        elif 32 <= key <= 126 and len(value) < max_len:
+            value += chr(key)
+    curses.curs_set(0)
+    win.timeout(-1)  # back to blocking behavior
+    if elapsed_secs >= timeout:
+        raise TimeoutError(f"Input timeout after {timeout}s")
+    return value
+
+# ── Screens ───────────────────────────────────────────────────────
+
+def screen_welcome(stdscr, rows, cols):
+    rows, cols = stdscr.getmaxyx()
+    if not ensure_min_screen(stdscr):
+        return False
+    stdscr.clear()
+    draw_header(stdscr, rows, cols)
+    draw_footer(stdscr, rows, cols, "[Enter] Begin installation    [Q] Quit")
+    cx = (cols - 60) // 2
+    draw_box(stdscr, 10, cx, 10, 60, " Welcome ")
+    lines = [
+        "  Welcome to GreenWayOS 2.0 ctOS Installer.",
+        "",
+        "  This protocol installs GreenWayOS + HUD desktop",
+        "  onto the selected disk.",
+        "",
+        "  ⚠  All data on selected disk will be erased.",
+        "",
+        "  Press Enter to continue.",
+    ]
+    for i, line in enumerate(lines):
+        try:
+            if "⚠" in line:
+                stdscr.attron(curses.color_pair(C_WARN) | curses.A_BOLD)
+            else:
+                stdscr.attron(curses.color_pair(C_NORMAL))
+            stdscr.addstr(12 + i, cx + 2, line[:56])
+            stdscr.attroff(curses.color_pair(C_NORMAL))
+            stdscr.attroff(curses.color_pair(C_WARN) | curses.A_BOLD)
+        except curses.error:
+            pass
+    stdscr.refresh()
+    while True:
+        k = stdscr.getch()
+        if k in (curses.KEY_ENTER, 10, 13):
+            return True
+        if k in (ord('q'), ord('Q')):
+            return False
+
+def screen_network(stdscr, rows, cols, state):
+    """Choose local/Ethernet (skip) or configure Wi-Fi before package download."""
+    rows, cols = stdscr.getmaxyx()
+    if not ensure_min_screen(stdscr):
+        return False
+    stdscr.clear()
+    draw_header(stdscr, rows, cols)
+    draw_footer(stdscr, rows, cols)
+    cx = (cols - 62) // 2
+    status = network_status_summary()
+    items = [
+        "Local / Ethernet (skip Wi-Fi, continue)",
+        "Wi-Fi (scan and connect)",
+    ]
+    # Show current status in title area
+    try:
+        stdscr.attron(curses.color_pair(C_DIM) | curses.A_DIM)
+        stdscr.addstr(8, max(2, (cols - len(status)) // 2), status[: cols - 4])
+        stdscr.attroff(curses.color_pair(C_DIM) | curses.A_DIM)
+    except curses.error:
+        pass
+
+    idx = menu_select(stdscr, items, " Internet connection ", 10, cx, 62)
+    if idx < 0:
+        return False
+
+    if idx == 0:
+        state["network_mode"] = "local"
+        state["network_type"] = "dhcp"
+        state["wifi_ssid"] = ""
+        return True
+
+    # Wi-Fi path
+    while True:
+        stdscr.clear()
+        draw_header(stdscr, rows, cols)
+        draw_footer(stdscr, rows, cols, "[Enter] Select    [R] Rescan    [Q] Back")
+        try:
+            msg = "Scanning Wi-Fi networks…"
+            stdscr.attron(curses.color_pair(C_WARN) | curses.A_BOLD)
+            stdscr.addstr(8, max(2, (cols - len(msg)) // 2), msg[: cols - 4])
+            stdscr.attroff(curses.color_pair(C_WARN) | curses.A_BOLD)
+            stdscr.refresh()
+        except curses.error:
+            pass
+
+        nets = scan_wifi(rescan=True)
+        if not nets:
+            stdscr.clear()
+            draw_header(stdscr, rows, cols)
+            draw_footer(stdscr, rows, cols, "[R] Rescan    [Q] Back to network menu")
+            hints = [
+                "No Wi-Fi networks found.",
+                "Check adapter / rfkill / USB passthrough (VMware).",
+                "Press R to rescan, Q to go back.",
+            ]
+            stdscr.attron(curses.color_pair(C_ERROR) | curses.A_BOLD)
+            for i, line in enumerate(hints):
+                try:
+                    stdscr.addstr(10 + i, max(2, (cols - len(line)) // 2), line[: cols - 4])
+                except curses.error:
+                    pass
+            stdscr.attroff(curses.color_pair(C_ERROR) | curses.A_BOLD)
+            stdscr.refresh()
+            while True:
+                k = stdscr.getch()
+                if k in (ord("r"), ord("R")):
+                    break
+                if k in (ord("q"), ord("Q"), 27):
+                    return False
+            continue
+
+        labels = []
+        for n in nets[:18]:
+            mark = "*" if n.get("in_use") else " "
+            sec = n.get("security") or "--"
+            labels.append(f"{mark} {n['ssid'][:28]:<28} {n['signal']:>3}%  {sec[:12]}")
+
+        stdscr.clear()
+        draw_header(stdscr, rows, cols)
+        draw_footer(stdscr, rows, cols, "[Enter] Connect    [R] Rescan    [Q] Back")
+        pick = menu_select(stdscr, labels, " Select Wi-Fi network ", 8, cx, 62)
+        if pick < 0:
+            # Q from menu — allow rescan via explicit key loop below isn't needed;
+            # menu_select returns -1 on Q. Offer rescan by looping outer while with prompt.
+            stdscr.clear()
+            draw_header(stdscr, rows, cols)
+            draw_footer(stdscr, rows, cols, "[R] Rescan    [Q] Back")
+            try:
+                stdscr.addstr(12, cx, "Press R to rescan or Q to cancel."[:60])
+            except curses.error:
+                pass
+            stdscr.refresh()
+            while True:
+                k = stdscr.getch()
+                if k in (ord("r"), ord("R")):
+                    break
+                if k in (ord("q"), ord("Q"), 27):
+                    return False
+            continue
+
+        net = nets[pick]
+        ssid = net["ssid"]
+        need_pass = net.get("security", "--") not in ("", "--", "None")
+
+        password = ""
+        if need_pass:
+            stdscr.clear()
+            draw_header(stdscr, rows, cols)
+            draw_footer(stdscr, rows, cols, "[Enter] OK    [Esc] Cancel")
+            try:
+                stdscr.attron(curses.color_pair(C_NORMAL))
+                stdscr.addstr(10, cx, f"SSID: {ssid}"[:60])
+                stdscr.attroff(curses.color_pair(C_NORMAL))
+            except curses.error:
+                pass
+            password = input_field(
+                stdscr, "Password: ", 12, cx, max_len=63, secret=True, allow_cancel=True
+            )
+            if password is None:
+                continue
+
+        stdscr.clear()
+        draw_header(stdscr, rows, cols)
+        try:
+            waiting = f"Connecting to {ssid}…"
+            stdscr.attron(curses.color_pair(C_WARN) | curses.A_BOLD)
+            stdscr.addstr(12, max(2, (cols - len(waiting)) // 2), waiting[: cols - 4])
+            stdscr.attroff(curses.color_pair(C_WARN) | curses.A_BOLD)
+            stdscr.refresh()
+        except curses.error:
+            pass
+
+        ok, msg = connect_wifi(ssid, password or None)
+        stdscr.clear()
+        draw_header(stdscr, rows, cols)
+        draw_footer(stdscr, rows, cols, "[Enter] Continue    [R] Retry    [Q] Back")
+        color = C_SUCCESS if ok else C_ERROR
+        try:
+            stdscr.attron(curses.color_pair(color) | curses.A_BOLD)
+            stdscr.addstr(12, max(2, (cols - len(msg)) // 2), msg[: cols - 4])
+            stdscr.attroff(curses.color_pair(color) | curses.A_BOLD)
+            online = "Internet OK" if check_internet() else "No internet yet (packages need net)"
+            stdscr.attron(curses.color_pair(C_DIM) | curses.A_DIM)
+            stdscr.addstr(14, max(2, (cols - len(online)) // 2), online[: cols - 4])
+            stdscr.attroff(curses.color_pair(C_DIM) | curses.A_DIM)
+        except curses.error:
+            pass
+        stdscr.refresh()
+
+        while True:
+            k = stdscr.getch()
+            if k in (curses.KEY_ENTER, 10, 13) and ok:
+                state["network_mode"] = "wifi"
+                state["network_type"] = "dhcp"
+                state["wifi_ssid"] = ssid
+                return True
+            if k in (ord("r"), ord("R")):
+                break
+            if k in (ord("q"), ord("Q"), 27):
+                return False
+            if k in (curses.KEY_ENTER, 10, 13) and not ok:
+                break
+
+def screen_disk(stdscr, rows, cols, state):
+    rows, cols = stdscr.getmaxyx()
+    if not ensure_min_screen(stdscr):
+        return False
+    stdscr.clear()
+    draw_header(stdscr, rows, cols)
+    draw_footer(stdscr, rows, cols)
+    disks = get_disks()
+    if not disks:
+        live = get_live_boot_disk() or "(none)"
+        hints = [
+            "No install target disks found.",
+            f"Live medium disk (excluded): {live}",
+            "VMware: add a virtual HDD (20GB+), ISO stays on CD/DVD.",
+            "Run: lsblk   then press any key.",
+        ]
+        stdscr.attron(curses.color_pair(C_ERROR) | curses.A_BOLD)
+        for i, line in enumerate(hints):
+            try:
+                stdscr.addstr(10 + i, max(2, (cols - len(line)) // 2), line[:cols - 4])
+            except curses.error:
+                pass
+        stdscr.attroff(curses.color_pair(C_ERROR) | curses.A_BOLD)
+        stdscr.refresh()
+        stdscr.getch()
+        return False
+    items = [f"{d[0]}  ({d[1]})  {d[2]}" for d in disks]
+    cx = (cols - 56) // 2
+    idx = menu_select(stdscr, items, " Select Target Disk ", 10, cx, 56)
+    if idx < 0:
+        return False
+    state["disk"] = disks[idx][0]
+    return True
+
+def screen_partition(stdscr, rows, cols, state):
+    """Choose wipe (quick) vs dual-boot (keep Windows / use free space)."""
+    rows, cols = stdscr.getmaxyx()
+    if not ensure_min_screen(stdscr):
+        return False
+    stdscr.clear()
+    draw_header(stdscr, rows, cols)
+    draw_footer(stdscr, rows, cols)
+    disk = state.get("disk", "?")
+    boot = state.get("boot_mode") or detect_boot_mode()
+    state["boot_mode"] = boot
+
+    ok_db, msg_db, info_db = assess_dualboot(disk, boot)
+    free_gb = info_db.get("free_gb")
+    free_hint = f"{free_gb:.1f}GB free" if free_gb else "no free space"
+    esp_hint = info_db.get("esp") or "no ESP"
+
+    items = [
+        "Erase entire disk (Quick) — DESTROYS all data",
+        f"Dual-boot (UEFI) — keep Windows, use free space [{free_hint}]",
+    ]
+    cx = (cols - 70) // 2
+    idx = menu_select(stdscr, items, " Partition Method ", 10, max(2, cx), min(70, cols - 4))
+    if idx < 0:
+        return False
+    if idx == 0:
+        state["partition_method"] = "quick"
+        return True
+
+    # Dual-boot
+    if boot != "uefi":
+        stdscr.clear()
+        draw_header(stdscr, rows, cols)
+        err = "Dual-boot requires UEFI firmware. Use Quick erase, or boot in UEFI."
+        try:
+            stdscr.attron(curses.color_pair(C_ERROR) | curses.A_BOLD)
+            stdscr.addstr(12, max(2, (cols - len(err)) // 2), err[: cols - 4])
+            stdscr.attroff(curses.color_pair(C_ERROR) | curses.A_BOLD)
+        except curses.error:
+            pass
+        stdscr.refresh()
+        stdscr.getch()
+        return False
+    if not ok_db:
+        stdscr.clear()
+        draw_header(stdscr, rows, cols)
+        lines = [
+            "Cannot dual-boot on this disk:",
+            msg_db,
+            f"ESP: {esp_hint}",
+            "Shrink Windows (Disk Management) to create 20GB+ unallocated space,",
+            "then retry Dual-boot.",
+        ]
+        for i, line in enumerate(lines):
+            try:
+                stdscr.attron(curses.color_pair(C_WARN) | curses.A_BOLD)
+                stdscr.addstr(11 + i, max(2, (cols - len(line)) // 2), line[: cols - 4])
+                stdscr.attroff(curses.color_pair(C_WARN) | curses.A_BOLD)
+            except curses.error:
+                pass
+        stdscr.refresh()
+        stdscr.getch()
+        return False
+
+    state["partition_method"] = "dualboot"
+    return True
+
+def screen_locale(stdscr, rows, cols, state):
+    rows, cols = stdscr.getmaxyx()
+    if not ensure_min_screen(stdscr):
+        return False
+    stdscr.clear()
+    draw_header(stdscr, rows, cols)
+    draw_footer(stdscr, rows, cols)
+    timezones = [
+        "Europe/Moscow",
+        "Europe/Samara",
+        "Europe/Kaliningrad",
+        "UTC",
+        "Asia/Yekaterinburg",
+    ]
+    cx = (cols - 50) // 2
+    idx = menu_select(stdscr, timezones, " Select Timezone ", 10, cx, 50)
+    if idx < 0:
+        return False
+    state["timezone"] = timezones[idx]
+
+    locales = ["ru_RU.UTF-8", "en_US.UTF-8"]
+    idx2 = menu_select(stdscr, locales, " Select Locale ", 10 + len(timezones) + 5, cx, 50)
+    if idx2 < 0:
+        return False
+    state["locale"] = locales[idx2]
+    return True
+
+def screen_expert(stdscr, rows, cols, state):
+    rows, cols = stdscr.getmaxyx()
+    if not ensure_min_screen(stdscr):
+        return False
+    stdscr.clear()
+    draw_header(stdscr, rows, cols)
+    draw_footer(stdscr, rows, cols)
+    cx = (cols - 58) // 2
+    mode_items = ["Standard setup", "Expert mode"]
+    mode_idx = menu_select(stdscr, mode_items, " Installation Mode ", 10, cx, 58)
+    if mode_idx < 0:
+        return False
+    if mode_idx == 0:
+        state["expert_mode"] = False
+        state["expert_profile"] = "standard"
+        state["install_ssh"] = False
+        state["hardening_level"] = "none"
+        return True
+
+    state["expert_mode"] = True
+    profile_items = [
+        "Systems Engineering Toolkit",
+        "Computer Security Toolkit",
+        "InfoTeCS-like Corporate Security Baseline",
+    ]
+    prof_idx = menu_select(stdscr, profile_items, " Expert Profile ", 15, cx, 58)
+    if prof_idx < 0:
+        return False
+    profile_map = {
+        0: "systems_engineering",
+        1: "computer_security",
+        2: "infotecs_corporate",
+    }
+    state["expert_profile"] = profile_map.get(prof_idx, "systems_engineering")
+
+    ssh_items = ["Do not install OpenSSH server", "Install and enable OpenSSH server"]
+    ssh_idx = menu_select(stdscr, ssh_items, " Remote Access ", 21, cx, 58)
+    if ssh_idx < 0:
+        return False
+    state["install_ssh"] = ssh_idx == 1
+
+    hardening_items = [
+        "No hardening automation",
+        "Balanced hardening (recommended)",
+        "Strict hardening (corporate)",
+    ]
+    hard_idx = menu_select(stdscr, hardening_items, " Hardening Level ", 26, cx, 58)
+    if hard_idx < 0:
+        return False
+    state["hardening_level"] = ["none", "balanced", "strict"][hard_idx]
+    return True
+
+def screen_user(stdscr, rows, cols, state):
+    rows, cols = stdscr.getmaxyx()
+    if not ensure_min_screen(stdscr):
+        return False
+
+    cx = (cols - 56) // 2
+    while True:
+        stdscr.clear()
+        draw_header(stdscr, rows, cols)
+        draw_footer(stdscr, rows, cols, "[Enter] Confirm each field    [Esc] Back")
+        draw_box(stdscr, 10, cx, 12, 56, " Create User Account ")
+        try:
+            stdscr.attron(curses.color_pair(C_DIM) | curses.A_DIM)
+            stdscr.addstr(12, cx + 2, "  Empty hostname -> greenwayos")
+            stdscr.attroff(curses.color_pair(C_DIM) | curses.A_DIM)
+        except curses.error:
+            pass
+
+        try:
+            hostname_raw = input_field(
+                stdscr, "  Hostname : ", 14, cx, 30, allow_cancel=True
+            )
+            if hostname_raw is None:
+                return False
+            hostname = hostname_raw.strip().lower() or "greenwayos"
+
+            username_raw = input_field(
+                stdscr, "  Username : ", 16, cx, 30, allow_cancel=True
+            )
+            if username_raw is None:
+                continue
+            username = username_raw.strip().lower()
+
+            password = input_field(
+                stdscr, "  Password : ", 18, cx, 30, secret=True, allow_cancel=True
+            )
+            if password is None:
+                continue
+            confirm = input_field(
+                stdscr, "  Confirm  : ", 20, cx, 30, secret=True, allow_cancel=True
+            )
+            if confirm is None:
+                continue
+        except TimeoutError:
+            try:
+                stdscr.attron(curses.color_pair(C_ERROR) | curses.A_BOLD)
+                stdscr.addstr(21, cx + 2, "  Input timeout. Press any key.")
+                stdscr.attroff(curses.color_pair(C_ERROR) | curses.A_BOLD)
+                stdscr.refresh()
+                stdscr.getch()
+            except curses.error:
+                pass
+            continue
+
+        error_msg = None
+        if not username:
+            error_msg = "  Username is required."
+        elif not password:
+            error_msg = "  Password is required."
+        elif not is_valid_hostname(hostname):
+            error_msg = "  Invalid hostname (letters, digits, hyphens)."
+        elif not USERNAME_RE.match(username):
+            error_msg = "  Invalid username (use a-z, 0-9, _)."
+        elif password != confirm:
+            error_msg = "  Passwords do not match."
+
+        if error_msg:
+            try:
+                stdscr.attron(curses.color_pair(C_ERROR) | curses.A_BOLD)
+                stdscr.addstr(21, cx + 2, error_msg + " Press any key.")
+                stdscr.attroff(curses.color_pair(C_ERROR) | curses.A_BOLD)
+                stdscr.refresh()
+                stdscr.getch()
+            except curses.error:
+                pass
+            continue
+
+        state.update({"hostname": hostname, "username": username, "password": password})
+        return True
+
+def screen_confirm(stdscr, rows, cols, state):
+    rows, cols = stdscr.getmaxyx()
+    if not ensure_min_screen(stdscr):
+        return False
+    stdscr.clear()
+    draw_header(stdscr, rows, cols)
+    draw_footer(stdscr, rows, cols, "[Enter] Install    [Q] Go Back")
+    cx = (cols - 56) // 2
+    draw_box(stdscr, 10, cx, 18, 56, " Confirm Installation ")
+    summary = [
+        f"  Disk     : {state.get('disk',   '?')}",
+        f"  Layout   : {state.get('partition_method', 'quick')}",
+        f"  Boot     : {state.get('boot_mode', '?')}",
+        f"  Network  : {state.get('network_mode', 'local')}"
+        + (f" ({state.get('wifi_ssid')})" if state.get("wifi_ssid") else ""),
+        f"  Timezone : {state.get('timezone','?')}",
+        f"  Locale   : {state.get('locale', '?')}",
+        f"  Mode     : {'Expert' if state.get('expert_mode') else 'Standard'}",
+        f"  Profile  : {state.get('expert_profile', 'standard')}",
+        f"  SSH      : {'Enabled' if state.get('install_ssh') else 'Disabled'}",
+        f"  Hardening: {state.get('hardening_level', 'none')}",
+        f"  Hostname : {state.get('hostname','?')}",
+        f"  Username : {state.get('username','?')}",
+        "",
+    ]
+    if state.get("partition_method") == "dualboot":
+        summary.append("  ✓ Dual-boot: Windows/other OS partitions will be KEPT")
+        summary.append("  ✓ New root uses unallocated space; ESP is reused")
+    else:
+        summary.append("  ⚠  All data on the disk will be ERASED!")
+    summary.extend(["", "  Press Enter to begin, Q to go back."])
+    for i, line in enumerate(summary):
+        try:
+            if "⚠" in line:
+                stdscr.attron(curses.color_pair(C_WARN) | curses.A_BOLD)
+            elif line.strip().startswith("✓"):
+                stdscr.attron(curses.color_pair(C_SUCCESS) | curses.A_BOLD)
+            else:
+                stdscr.attron(curses.color_pair(C_NORMAL))
+            stdscr.addstr(12 + i, cx, line[:54])
+            stdscr.attroff(curses.color_pair(C_WARN) | curses.A_BOLD)
+            try:
+                stdscr.attroff(curses.color_pair(C_SUCCESS) | curses.A_BOLD)
+            except Exception:
+                pass
+            stdscr.attroff(curses.color_pair(C_NORMAL))
+        except curses.error:
+            pass
+    stdscr.refresh()
+    while True:
+        k = stdscr.getch()
+        if k in (curses.KEY_ENTER, 10, 13):
+            return True
+        if k in (ord('q'), ord('Q')):
+            return False
+
+# ── Context manager for safe chroot operations ────────────────────
+class ChrootManager:
+    """
+    Context manager for safe chroot environment handling.
+    Guarantees cleanup of mounts even if an error occurs.
+    """
+    
+    def __init__(self, chroot_path="/mnt", log_cb=None):
+        self.chroot_path = chroot_path
+        self.mounted_paths = []
+        self.log = log_cb or (lambda x: logger.info(x))
+    
+    def __enter__(self):
+        """Setup chroot mounts."""
+        self.log(f">>> Setting up chroot environment at {self.chroot_path}")
+        return self
+    
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Guaranteed cleanup of all mounts."""
+        self.cleanup()
+        if exc_type is not None:
+            self.log(f"✗ Chroot operation failed: {exc_val}")
+            logger.error(f"Chroot operation failed: {exc_val}")
+        return False  # Don't suppress exceptions
+    
+    def mount(self, fstype: str, target_mount: str, description: str = "") -> bool:
+        """Mount a filesystem and track it."""
+        try:
+            cmd = ["mount", "-t", fstype, fstype, target_mount]
+            result = subprocess.run(cmd, check=False, capture_output=True, text=True)
+            if result.returncode == 0:
+                self.mounted_paths.append(target_mount)
+                desc = f" ({description})" if description else ""
+                self.log(f"✓ Mounted {fstype}{desc} at {target_mount}")
+                logger.info(f"Mounted {fstype} at {target_mount}")
+                return True
+            else:
+                self.log(f"✗ Failed to mount {fstype}: {result.stderr}")
+                logger.error(f"Mount failed: {result.stderr}")
+                return False
+        except Exception as e:
+            self.log(f"✗ Mount exception: {e}")
+            logger.exception(f"Mount exception: {e}")
+            return False
+    
+    def mount_pseudofs(self) -> bool:
+        """Mount /proc, /sys, /dev."""
+        mounts = [
+            ("proc", f"{self.chroot_path}/proc", "kernel process filesystem"),
+            ("sysfs", f"{self.chroot_path}/sys", "kernel sysfs"),
+            ("devtmpfs", f"{self.chroot_path}/dev", "device filesystem"),
+        ]
+        
+        for fstype, mountpoint, desc in mounts:
+            if not self.mount(fstype, mountpoint, desc):
+                self.cleanup()
+                return False
+        return True
+    
+    def cleanup(self):
+        """Unmount all tracked mount points in reverse order."""
+        if not self.mounted_paths:
+            return
+        
+        self.log(">>> Cleaning up chroot mounts...")
+        for mountpoint in reversed(self.mounted_paths):
+            try:
+                cmd = ["umount", "-l", mountpoint]
+                result = subprocess.run(cmd, check=False, capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    self.log(f"✓ Unmounted {mountpoint}")
+                    logger.info(f"Unmounted {mountpoint}")
+                else:
+                    self.log(f"⚠ Failed to unmount {mountpoint}: {result.stderr}")
+                    logger.warning(f"Unmount failed: {result.stderr}")
+            except subprocess.TimeoutExpired:
+                self.log(f"⚠ Unmount timeout for {mountpoint}, using -l flag")
+                logger.warning(f"Unmount timeout for {mountpoint}")
+            except Exception as e:
+                self.log(f"⚠ Unmount exception for {mountpoint}: {e}")
+                logger.warning(f"Unmount exception: {e}")
+
+def screen_install(stdscr, rows, cols, state):
+    rows, cols = stdscr.getmaxyx()
+    if not ensure_min_screen(stdscr):
+        return False
+    subprocess.run(["dmesg", "-n", "3"], check=False, capture_output=True)
+    stdscr.clear()
+    stdscr.nodelay(True)
+
+    pct = [0]
+    label = ["Preparing…"]
+    log = []
+    done = [False]
+    error = [None]
+
+    def cb_progress(p, l):
+        pct[0] = p
+        label[0] = l
+
+    def cb_log(l):
+        log.append(l)
+
+    def cb_done():
+        done[0] = True
+
+    def cb_error(e):
+        error[0] = e
+
+    t = threading.Thread(
+        target=install_system,
+        args=(state, cb_progress, cb_log, cb_done, cb_error),
+        daemon=True,
+    )
+    t.start()
+
+    bar_w = max(20, cols - 4)
+    log_header_y = 6 if " · " in label[0] else 5
+    log_lines = max(6, rows - log_header_y - 2)
+
+    while not done[0] and not error[0]:
+        try:
+            stdscr.erase()
+            title = " INSTALL PROTOCOL "
+            stdscr.attron(curses.color_pair(C_TITLE) | curses.A_BOLD)
+            stdscr.addstr(0, max(0, (cols - len(title)) // 2), title[:cols - 1])
+            stdscr.attroff(curses.color_pair(C_TITLE) | curses.A_BOLD)
+            draw_progress_bar(stdscr, 2, 2, bar_w, pct[0], label[0][: cols - 4])
+            stdscr.attron(curses.color_pair(C_DIM) | curses.A_DIM)
+            stdscr.addstr(log_header_y, 2, "Log: /var/log/greenwayos-install.log"[:cols - 3])
+            stdscr.attroff(curses.color_pair(C_DIM) | curses.A_DIM)
+            log_start = max(0, len(log) - log_lines)
+            for i, entry in enumerate(log[log_start:]):
+                y = log_header_y + 1 + i
+                if y >= rows - 1:
+                    break
+                try:
+                    stdscr.attron(curses.color_pair(C_NORMAL))
+                    stdscr.addstr(y, 1, entry[: cols - 2])
+                    stdscr.attroff(curses.color_pair(C_NORMAL))
+                except curses.error:
+                    pass
+            hint = "Installing — please wait…"
+            stdscr.attron(curses.color_pair(C_DIM) | curses.A_DIM)
+            stdscr.addstr(rows - 1, max(0, (cols - len(hint)) // 2), hint[:cols - 1])
+            stdscr.attroff(curses.color_pair(C_DIM) | curses.A_DIM)
+            stdscr.refresh()
+        except curses.error:
+            pass
+        time.sleep(0.2)
+
+    stdscr.nodelay(False)
+
+    if error[0]:
+        stdscr.clear()
+        stdscr.attron(curses.color_pair(C_ERROR) | curses.A_BOLD)
+        err_lines = str(error[0]).splitlines()
+        for i, line in enumerate(err_lines[: max(1, rows - 3)]):
+            try:
+                stdscr.addstr(1 + i, 1, line[: cols - 2])
+            except curses.error:
+                pass
+        stdscr.attroff(curses.color_pair(C_ERROR) | curses.A_BOLD)
+        stdscr.attron(curses.color_pair(C_DIM) | curses.A_DIM)
+        stdscr.addstr(rows - 2, 1, "Press any key to go back."[:cols - 2])
+        stdscr.attroff(curses.color_pair(C_DIM) | curses.A_DIM)
+        stdscr.refresh()
+        stdscr.getch()
+        return False
+    return True
+
+def screen_done(stdscr, rows, cols):
+    rows, cols = stdscr.getmaxyx()
+    if not ensure_min_screen(stdscr):
+        return
+    stdscr.clear()
+    draw_header(stdscr, rows, cols)
+    draw_footer(stdscr, rows, cols, "[R] Reboot    [Q] Exit to shell")
+    cx = (cols - 56) // 2
+    draw_box(stdscr, 10, cx, 10, 56, " Installation Complete ")
+    lines = [
+        "  ✔ GreenWayOS has been installed!",
+        "",
+        "  Remove the live media and reboot.",
+        "  Your system is ready to use.",
+        "",
+        "  Press R to reboot now.",
+    ]
+    for i, line in enumerate(lines):
+        try:
+            if "✔" in line:
+                stdscr.attron(curses.color_pair(C_SUCCESS) | curses.A_BOLD)
+            else:
+                stdscr.attron(curses.color_pair(C_NORMAL))
+            stdscr.addstr(12 + i, cx, line[:54])
+            stdscr.attroff(curses.color_pair(C_SUCCESS) | curses.A_BOLD)
+            stdscr.attroff(curses.color_pair(C_NORMAL))
+        except curses.error:
+            pass
+    stdscr.refresh()
+    while True:
+        k = stdscr.getch()
+        if k in (ord('r'), ord('R')):
+            subprocess.run(["reboot"])
+        if k in (ord('q'), ord('Q')):
+            return
+
+# ── Main ──────────────────────────────────────────────────────────
+
+def main(stdscr):
+    try:
+        locale.setlocale(locale.LC_ALL, 'C.UTF-8')
+    except locale.Error:
+        locale.setlocale(locale.LC_ALL, '')
+
+    setup_terminal()
+    try:
+        curses.curs_set(0)
+    except curses.error:
+        pass
+    stdscr.keypad(True)
+    init_colours()
+    state = {"boot_mode": detect_boot_mode()}
+
+    screens = [
+        lambda: screen_welcome(stdscr, 0, 0),
+        lambda: screen_network(stdscr, 0, 0, state),
+        lambda: screen_disk(stdscr, 0, 0, state),
+        lambda: screen_partition(stdscr, 0, 0, state),
+        lambda: screen_locale(stdscr, 0, 0, state),
+        lambda: screen_expert(stdscr, 0, 0, state),
+        lambda: screen_user(stdscr, 0, 0, state),
+        lambda: screen_confirm(stdscr, 0, 0, state),
+        lambda: screen_install(stdscr, 0, 0, state),
+    ]
+
+    i = 0
+    while i < len(screens):
+        result = screens[i]()
+        if result:
+            i += 1
+        else:
+            if i > 0:
+                i -= 1          # Go back
+            else:
+                return          # Quit on first screen
+
+    if i == len(screens):
+        screen_done(stdscr, 0, 0)
+
+def _run_on_tty():
+    """Run on a fresh Linux VT (needed after X11 or from a broken pseudo-tty)."""
+    if os.environ.get("GREENWAYOS_INSTALLER_VIA_OPENVT") == "1":
+        return
+    if os.environ.get("INVOCATION_ID") or os.environ.get("JOURNAL_STREAM"):
+        return
+    openvt = shutil.which("openvt")
+    if openvt:
+        env = os.environ.copy()
+        env["GREENWAYOS_INSTALLER_VIA_OPENVT"] = "1"
+        os.execvpe(
+            openvt,
+            [openvt, "-f", "-s", "-w", "-c", "1", "--", sys.executable, *sys.argv],
+            env,
+        )
+    if not sys.stdin.isatty():
+        print(
+            "ERROR: Text installer needs a real console.\n"
+            "  Install package kbd, then: sudo openvt -f -s -w -- greenwayos-installer",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    if os.geteuid() != 0:
+        print("GreenWayOS Installer must be run as root.")
+        sys.exit(1)
+    if not shutil.which("debootstrap"):
+        print("ERROR: debootstrap not found. Rebuild ISO with debootstrap in package lists.")
+        sys.exit(1)
+    _run_on_tty()
+    try:
+        curses.wrapper(main)
+    except curses.error as exc:
+        if os.environ.get("GREENWAYOS_INSTALLER_VIA_OPENVT") != "1":
+            _run_on_tty()
+        print(
+            f"ERROR: Terminal UI failed ({exc}).\n"
+            "  Try: sudo openvt -f -s -w -- greenwayos-installer",
+            file=sys.stderr,
+        )
+        sys.exit(1)

@@ -1,0 +1,74 @@
+#!/bin/bash
+# chroot hook: set up GUI environment for GreenWayOS ctOS HUD
+set -euo pipefail
+
+trap 'echo "[ERROR] Hook failed at line $LINENO"; exit 1' ERR
+
+echo "[✓] Setting up ctOS HUD GUI environment..."
+
+mkdir -p /usr/share/greenwayos/ctos
+mkdir -p /usr/share/themes/GreenWay-ctOS
+
+# Ensure legacy wallpaper path exists (installer/engine references)
+if [ -f /usr/share/greenwayos/ctos/wallpaper.png ]; then
+  cp -f /usr/share/greenwayos/ctos/wallpaper.png /usr/share/greenwayos/wallpaper.png
+  echo "[✓] Wallpaper linked"
+elif [ ! -f /usr/share/greenwayos/wallpaper.png ]; then
+  echo "[⚠] WARNING: ctOS wallpaper missing" >&2
+fi
+
+# LightDM greeter (ctOS)
+mkdir -p /etc/lightdm/lightdm-gtk-greeter.conf.d
+if [ ! -f /etc/lightdm/lightdm-gtk-greeter.conf.d/99-greenwayos-ctos.conf ]; then
+  cat > /etc/lightdm/lightdm-gtk-greeter.conf.d/99-greenwayos-ctos.conf << 'EOF'
+[greeter]
+background=/usr/share/greenwayos/ctos/wallpaper-lock.png
+theme-name=GreenWay-ctOS
+icon-theme-name=Adwaita
+font-name=JetBrains Mono 11
+indicators=~host;~spacer;~clock;~spacer;~session;~power
+clock-format=%H:%M // %Y-%m-%d
+user-background=false
+hide-user-image=true
+EOF
+fi
+echo "[✓] LightDM ctOS greeter configured"
+
+# Ensure xdg xfce defaults present
+mkdir -p /etc/xdg/xfce4/xfconf/xfce-perchannel-xml
+if [ ! -f /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml ]; then
+  echo "[⚠] xsettings.xml missing from includes — theme may not apply" >&2
+fi
+
+# Seed live user home from skel when user exists at build time (live-build may recreate)
+if [ -d /etc/skel/.config ] && id user >/dev/null 2>&1; then
+  mkdir -p /home/user
+  cp -a /etc/skel/.config /home/user/ 2>/dev/null || true
+  chown -R user:user /home/user/.config 2>/dev/null || true
+  echo "[✓] Seeded /home/user/.config from skel"
+fi
+
+# Enable graphical login
+if systemctl set-default graphical.target 2>/dev/null; then
+  echo "[✓] default.target → graphical"
+else
+  ln -sf /lib/systemd/system/graphical.target /etc/systemd/system/default.target 2>/dev/null || true
+fi
+
+if systemctl enable lightdm.service 2>/dev/null; then
+  echo "[✓] lightdm.service enabled"
+else
+  echo "[⚠] WARNING: systemctl enable lightdm failed — trying manual symlink" >&2
+  mkdir -p /etc/systemd/system/graphical.target.wants
+  ln -sf /lib/systemd/system/lightdm.service /etc/systemd/system/display-manager.service 2>/dev/null || true
+  ln -sf /lib/systemd/system/lightdm.service /etc/systemd/system/graphical.target.wants/lightdm.service 2>/dev/null || true
+fi
+
+if systemctl enable greenwayos-live-display.service 2>/dev/null; then
+  echo "[✓] greenwayos-live-display.service enabled"
+else
+  mkdir -p /etc/systemd/system/graphical.target.wants
+  ln -sf ../greenwayos-live-display.service /etc/systemd/system/graphical.target.wants/greenwayos-live-display.service 2>/dev/null || true
+fi
+
+echo "[✓] ctOS GUI environment ready"

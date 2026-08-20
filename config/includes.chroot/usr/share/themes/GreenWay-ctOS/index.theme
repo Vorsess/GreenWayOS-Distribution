@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=X-GNOME-Metatheme
+Name=GreenWay-ctOS
+Comment=GreenWayOS ctOS HUD theme
+Encoding=UTF-8
+
+[X-GNOME-Metatheme]
+GtkTheme=GreenWay-ctOS
+MetacityTheme=GreenWay-ctOS
+IconTheme=Adwaita
+CursorTheme=Adwaita
+ButtonLayout=close,minimize,maximize:

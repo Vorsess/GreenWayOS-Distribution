@@ -1,0 +1,37 @@
+# GreenWayOS ctOS HUD — post-ISO manual checklist
+# Run after building and booting the ISO (VMware / USB).
+
+LIVE NODE
+  [ ] GRUB menu shows cyan HUD titles (LIVE NODE, INSTALL // GUI, …)
+  [ ] LightDM greeter uses dark wallpaper + GreenWay-ctOS theme
+  [ ] XFCE panel shows "APPS //" and dark HUD chrome
+  [ ] Panel: volume works; pavucontrol opens (no "file not found")
+  [ ] Panel: layout indicator US/RU; Alt+Shift switches keyboard
+  [ ] Windows use GreenWay-ctOS borders (cyan active edge)
+  [ ] Terminal: black bg, cyan text
+  [ ] Autostart: ctOS HUD boot sequence → SYSTEM ONLINE
+
+INSTALL // GUI
+  [ ] Installer UI is dark HUD (not old green Spotify card look)
+  [ ] Network / disk steps still work
+  [ ] After install + reboot: same theme as Live (not stock XFCE)
+  [ ] Installed GRUB: "GreenWayOS // NODE" theme (not blue Debian box)
+  [ ] Installed: sound + Alt+Shift layouts work
+
+INSTALL // TTY
+  [ ] Curses installer starts on tty1 (no login: prompt)
+  [ ] Header shows ctOS / INSTALL PROTOCOL
+
+SAFE paths
+  [ ] SAFE LIVE / INSTALL // GUI SAFE still boot under nomodeset
+
+DUAL-BOOT (Windows + GreenWayOS, UEFI)
+  [ ] Shrink Windows (Disk Mgmt) → 20GB+ Unallocated
+  [ ] Installer: choose Dual-boot (not Quick erase)
+  [ ] Windows partitions untouched; new root in free space
+  [ ] GRUB shows GreenWayOS + Windows Boot Manager
+  [ ] Firmware boot entry GreenWayOS registered
+
+ALREADY INSTALLED (old ISO without audio/xkb/grub theme)
+  sudo bash scripts/fix-installed-desktop.sh
+  then re-login (or reboot)

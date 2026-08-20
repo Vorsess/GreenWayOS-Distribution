@@ -1,0 +1,14 @@
+[Unit]
+Description=GreenWayOS Live — switch console to graphical VT
+ConditionKernelCommandLine=!greenwayos.install=1
+After=lightdm.service
+Wants=lightdm.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/greenwayos-live-chvt.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+
+[Install]
+WantedBy=graphical.target

@@ -1,0 +1,27 @@
+# GreenWayOS default iptables rules
+# Saved by iptables-persistent on first boot
+
+# ── Default policies ───────────────────────────────────────────────
+*filter
+:INPUT DROP [0:0]
+:FORWARD DROP [0:0]
+:OUTPUT ACCEPT [0:0]
+
+# ── Allow loopback ─────────────────────────────────────────────────
+-A INPUT -i lo -j ACCEPT
+
+# ── Allow established / related connections ────────────────────────
+-A INPUT -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
+
+# ── Allow ICMP (ping) ─────────────────────────────────────────────
+-A INPUT -p icmp --icmp-type echo-request -j ACCEPT
+
+# ── Allow SSH (port 22) - DISABLED in Live mode ────────────────────
+# SSH is disabled for security in live environment.
+# After installation, users can enable with:
+#   sudo ufw allow 22/tcp
+# Or restrict to specific subnet:
+#   sudo ufw allow from 192.168.1.0/24 to any port 22
+# -A INPUT -p tcp --dport 22 -m conntrack --ctstate NEW -j ACCEPT
+
+COMMIT

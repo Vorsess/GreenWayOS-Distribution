@@ -1,0 +1,14 @@
+#!/bin/sh
+# Installer mode: ensure live user and root can log in without a password (empty Enter).
+set -eu
+
+if [ ! -f /run/greenwayos/install ]; then
+  exit 0
+fi
+
+if id user >/dev/null 2>&1; then
+  passwd -d user 2>/dev/null || true
+fi
+passwd -d root 2>/dev/null || true
+
+exit 0

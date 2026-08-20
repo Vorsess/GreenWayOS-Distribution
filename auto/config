@@ -1,0 +1,40 @@
+#!/bin/sh
+
+set -e
+
+# Mirrors: deb.debian.org (CDN). Yandex HTTPS previously hung apt in CLOSE_WAIT.
+# Timeouts: fail/retry instead of blocking the build for 30+ minutes.
+MIRROR="https://deb.debian.org/debian/"
+SEC_MIRROR="http://security.debian.org/"
+APT_OPTS="--yes -o Acquire::Retries=5 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o Acquire::ftp::Timeout=30"
+
+# ISO9660/Joliet volume id should be short (<= 16) and simple.
+lb config noauto \
+    --distribution bookworm \
+    --architectures amd64 \
+    --archive-areas "main contrib non-free non-free-firmware" \
+    --debian-installer none \
+    --binary-images iso-hybrid \
+    --bootloaders "grub-pc grub-efi" \
+    --mirror-bootstrap "${MIRROR}" \
+    --mirror-chroot "${MIRROR}" \
+    --mirror-chroot-security "${SEC_MIRROR}" \
+    --mirror-binary "${MIRROR}" \
+    --mirror-binary-security "${SEC_MIRROR}" \
+    --parent-mirror-bootstrap "${MIRROR}" \
+    --parent-mirror-chroot "${MIRROR}" \
+    --parent-mirror-chroot-security "${SEC_MIRROR}" \
+    --parent-mirror-binary "${MIRROR}" \
+    --parent-mirror-binary-security "${SEC_MIRROR}" \
+    --apt-options "${APT_OPTS}" \
+    --bootappend-live "boot=live components hostname=greenwayos username=user plymouth.enable=0 rd.plymouth=0" \
+    --bootappend-live-failsafe "boot=live components hostname=greenwayos username=user nomodeset plymouth.enable=0 rd.plymouth=0" \
+    --iso-application "GreenWayOS Live" \
+    --iso-preparer "Sergey Karamyshev (Vorsess)" \
+    --iso-publisher "GreenWayOS Project" \
+    --iso-volume "GREENWAYOS_1" \
+    --hdd-label "GreenWayOS" \
+    --image-name "greenwayos" \
+    --chroot-squashfs-compression-type gzip \
+    --linux-flavours amd64 \
+    "${@}"

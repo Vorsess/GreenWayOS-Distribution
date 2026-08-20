@@ -1,0 +1,21 @@
+#!/bin/bash
+# GreenWayOS – chroot hook: apply iptables rules via netfilter-persistent
+set -euo pipefail
+
+# Error handling
+trap 'echo "[ERROR] Hook failed at line $LINENO"; exit 1' ERR
+
+echo "[✓] Configuring iptables-persistent..."
+if echo iptables-persistent iptables-persistent/autosave_v4 boolean true | debconf-set-selections; then
+    echo "[✓]   ✓ IPv4 autosave enabled"
+else
+    echo "[⚠] WARNING: Failed to set IPv4 autosave" >&2
+fi
+
+if echo iptables-persistent iptables-persistent/autosave_v6 boolean false | debconf-set-selections; then
+    echo "[✓]   ✓ IPv6 autosave disabled"
+else
+    echo "[⚠] WARNING: Failed to set IPv6 autosave" >&2
+fi
+
+echo "[✓] iptables-persistent configured"

@@ -1,0 +1,54 @@
+#!/bin/sh
+# Ensure PulseAudio is running and default sink is unmuted (Live + installed).
+# Safe to run repeatedly from XDG autostart.
+
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+
+# Prefer user systemd unit when available
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl --user start pulseaudio.socket 2>/dev/null || true
+  systemctl --user start pulseaudio.service 2>/dev/null || true
+fi
+
+if command -v pulseaudio >/dev/null 2>&1; then
+  # Start daemon if not already running (ignore "already running")
+  pulseaudio --check 2>/dev/null || pulseaudio --start --exit-idle-time=-1 2>/dev/null || true
+fi
+
+# Give the daemon a moment to publish sinks (esp. in VMs)
+i=0
+while [ "$i" -lt 15 ]; do
+  if command -v pactl >/dev/null 2>&1 && pactl info >/dev/null 2>&1; then
+    break
+  fi
+  i=$((i + 1))
+  sleep 0.3
+done
+
+if ! command -v pactl >/dev/null 2>&1; then
+  exit 0
+fi
+
+# Unmute and raise default sink / source
+pactl set-sink-mute @DEFAULT_SINK@ 0 2>/dev/null || true
+pactl set-sink-volume @DEFAULT_SINK@ 70% 2>/dev/null || true
+pactl set-source-mute @DEFAULT_SOURCE@ 0 2>/dev/null || true
+
+# Also unmute every sink (some VMs expose odd default)
+pactl list short sinks 2>/dev/null | while read -r idx _rest; do
+  [ -n "$idx" ] || continue
+  pactl set-sink-mute "$idx" 0 2>/dev/null || true
+  pactl set-sink-volume "$idx" 70% 2>/dev/null || true
+done
+
+# ALSA card unmute fallback
+if command -v amixer >/dev/null 2>&1; then
+  amixer -q sset Master unmute 2>/dev/null || true
+  amixer -q sset Master 70% 2>/dev/null || true
+  amixer -q sset PCM unmute 2>/dev/null || true
+  amixer -q sset PCM 70% 2>/dev/null || true
+  amixer -q sset Speaker unmute 2>/dev/null || true
+  amixer -q sset Headphone unmute 2>/dev/null || true
+fi
+
+exit 0

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=GreenWayOS About
+Comment=About GreenWayOS and creator credits
+Exec=terminator -e greenwayos-about
+Icon=greenwayos-logo
+Terminal=false
+Categories=System;
+OnlyShowIn=XFCE;
+

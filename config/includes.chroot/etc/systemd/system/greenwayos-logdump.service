@@ -1,0 +1,14 @@
+[Unit]
+Description=GreenWayOS session log dump on shutdown
+DefaultDependencies=no
+Before=shutdown.target
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/greenwayos-save-logs
+TimeoutStartSec=20
+
+[Install]
+WantedBy=shutdown.target
+

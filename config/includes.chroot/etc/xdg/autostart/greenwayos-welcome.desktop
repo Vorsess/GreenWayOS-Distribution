@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=ctOS HUD
+Comment=GreenWayOS control panel
+Exec=/usr/local/bin/greenwayos-welcome
+Icon=greenwayos-logo
+Terminal=false
+Categories=System;
+OnlyShowIn=XFCE;
+StartupNotify=false
+X-GNOME-Autostart-Delay=2

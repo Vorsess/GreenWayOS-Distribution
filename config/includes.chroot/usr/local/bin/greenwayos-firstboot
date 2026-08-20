@@ -1,0 +1,135 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MARKER="/etc/greenwayos-firstboot-done"
+if [[ -f "$MARKER" ]]; then
+  exit 0
+fi
+
+# Apply ctOS HUD theme to all existing users (skel may have been missed).
+apply_ctos_theme() {
+  echo ">>> Applying GreenWayOS ctOS HUD theme..."
+  mkdir -p /usr/share/themes /usr/share/greenwayos /etc/skel/.config
+
+  if [[ -d /usr/share/greenwayos/ctos ]] && [[ -d /etc/xdg/xfce4 ]]; then
+    true
+  fi
+
+  # Ensure greeter points at ctOS wallpaper
+  mkdir -p /etc/lightdm/lightdm-gtk-greeter.conf.d
+  if [[ ! -f /etc/lightdm/lightdm-gtk-greeter.conf.d/99-greenwayos-ctos.conf ]]; then
+    cat > /etc/lightdm/lightdm-gtk-greeter.conf.d/99-greenwayos-ctos.conf <<'EOF'
+[greeter]
+background=/usr/share/greenwayos/ctos/wallpaper-lock.png
+theme-name=GreenWay-ctOS
+icon-theme-name=Adwaita
+font-name=JetBrains Mono 11
+user-background=false
+hide-user-image=true
+EOF
+  fi
+
+  # Copy skel xfce/gtk config into each real home
+  if [[ -d /etc/skel/.config ]]; then
+    for home in /home/*; do
+      [[ -d "$home" ]] || continue
+      user="$(basename "$home")"
+      id "$user" >/dev/null 2>&1 || continue
+      mkdir -p "$home/.config"
+      cp -a /etc/skel/.config/. "$home/.config/" 2>/dev/null || true
+      chown -R "$user:$user" "$home/.config" 2>/dev/null || true
+    done
+  fi
+
+  # xfconf via dbus is unreliable in early boot; file copy above is enough.
+  systemctl set-default graphical.target 2>/dev/null || true
+  systemctl enable lightdm.service 2>/dev/null || true
+  echo ">>> ctOS theme apply done"
+}
+
+# ── Retry helper for apt operations ─────────────────────────────────
+retry_apt() {
+    local max_attempts=3
+    local attempt=1
+    local backoff=2
+
+    while (( attempt <= max_attempts )); do
+        echo "[apt-get attempt $attempt/$max_attempts] $*"
+        if apt-get "$@"; then
+            return 0
+        fi
+
+        if (( attempt < max_attempts )); then
+            echo "apt-get failed, retrying in ${backoff}s..."
+            sleep "$backoff"
+            backoff=$((backoff * 2))
+        fi
+        ((attempt++))
+    done
+
+    echo "apt-get failed after $max_attempts attempts"
+    return 1
+}
+
+# Service mode: safe, non-interactive baseline setup.
+if [[ "${1:-}" == "--service" ]]; then
+  export DEBIAN_FRONTEND=noninteractive
+  apply_ctos_theme || true
+  retry_apt update -qq || true
+  touch "$MARKER"
+  exit 0
+fi
+
+# Manual mode requires an interactive terminal.
+if [[ ! -t 0 || ! -t 1 ]]; then
+  echo "No interactive terminal. Run this tool from a terminal session."
+  exit 0
+fi
+
+if [[ "${1:-}" == "--help" ]]; then
+  cat <<'EOF'
+Usage: greenwayos-firstboot [--service]
+
+--service   Run non-interactive service mode.
+            Intended for systemd oneshot use.
+EOF
+  exit 0
+fi
+
+echo "GreenWayOS ctOS: first-run setup"
+echo "----------------------------------------"
+apply_ctos_theme || true
+echo
+echo "1) Skip (no changes)"
+echo "2) Update package lists (apt-get update)"
+echo "3) Install and enable SSH server (openssh-server)"
+echo
+printf "Choose [1-3] (default 1): "
+
+read -r choice || choice="1"
+choice="${choice:-1}"
+
+case "$choice" in
+  1)
+    echo "Skipping extras. You can run: greenwayos-about"
+    ;;
+  2)
+    echo "Running apt-get update..."
+    retry_apt update -qq || true
+    ;;
+  3)
+    echo "Installing openssh-server..."
+    export DEBIAN_FRONTEND=noninteractive
+    retry_apt install -y openssh-server || true
+    if command -v systemctl >/dev/null 2>&1; then
+      systemctl enable --now ssh 2>/dev/null || true
+    fi
+    ;;
+  *)
+    echo "Unknown choice. Skipping."
+    ;;
+esac
+
+touch "$MARKER"
+echo
+echo "Done. Reboot if you changed SSH settings."

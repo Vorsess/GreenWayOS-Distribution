@@ -1,0 +1,16 @@
+[Unit]
+Description=GreenWayOS installer mode flags (early, from kernel cmdline)
+DefaultDependencies=no
+After=local-fs.target
+Before=live-config.service getty@tty1.service greenwayos-text-install.service greenwayos-gui-install.service
+ConditionKernelCommandLine=greenwayos.install=1
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/greenwayos-set-install-flags.sh
+RemainAfterExit=yes
+StandardOutput=journal+console
+StandardError=journal+console
+
+[Install]
+WantedBy=sysinit.target

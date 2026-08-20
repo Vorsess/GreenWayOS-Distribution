@@ -1,0 +1,26 @@
+[Unit]
+Description=GreenWayOS Graphical Installer (Standalone X11)
+ConditionKernelCommandLine=greenwayos.gui_install=1
+After=greenwayos-install-banner.service greenwayos-install-flags.service basic.target
+Wants=greenwayos-install-banner.service
+Before=lightdm.service
+Conflicts=greenwayos-text-install.service lightdm.service getty@tty2.service
+
+[Service]
+Type=simple
+User=root
+Environment=LANG=C.UTF-8
+Environment=LC_ALL=C.UTF-8
+Environment=QT_QPA_PLATFORM=xcb
+Environment=QT_AUTO_SCREEN_SCALE_FACTOR=0
+StandardInput=null
+StandardOutput=journal+console
+StandardError=journal+console
+ExecStart=/usr/local/bin/greenwayos-start-x-installer.sh
+OnFailure=greenwayos-gui-fallback.service
+Restart=no
+TimeoutStartSec=300
+TimeoutStopSec=30
+
+[Install]
+WantedBy=multi-user.target

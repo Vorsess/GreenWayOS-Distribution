@@ -1,0 +1,9 @@
+[Unit]
+Description=GreenWayOS text installer fallback after GUI failure
+ConditionPathExists=/run/greenwayos/gui
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/greenwayos-gui-x-fallback.sh
+StandardOutput=journal+console
+StandardError=journal+console

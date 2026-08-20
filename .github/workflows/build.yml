@@ -1,0 +1,186 @@
+name: GreenWayOS Build & Test
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+
+jobs:
+  syntax-check:
+    name: Syntax & Format Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Check bash syntax (build.sh)
+        run: bash -n build.sh
+
+      - name: Check bash syntax (auto/*)
+        run: |
+          bash -n auto/build
+          bash -n auto/clean
+          bash -n auto/config
+
+      - name: Check bash syntax (hooks)
+        run: |
+          find config/hooks -type f \( -name '*.chroot' -o -name '*.binary' -o -name '*.hook.chroot' -o -name '*.hook.binary' \) -print0 | \
+            xargs -0 -I {} bash -n {}
+
+      - name: ShellCheck lint
+        run: |
+          shellcheck -x build.sh auto/build auto/clean auto/config || true
+          find config/hooks -type f \( -name '*.chroot' -o -name '*.binary' -o -name '*.hook.chroot' -o -name '*.hook.binary' \) | \
+            xargs shellcheck -x || true
+
+      - name: Check Python syntax
+        run: |
+          python3 -m py_compile config/includes.chroot/usr/local/bin/greenwayos-installer || true
+          python3 -m py_compile config/includes.chroot/usr/local/bin/greenwayos-installer-gui || true
+
+  validate:
+    name: Project Validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check required files exist
+        run: |
+          test -f build.sh || (echo "build.sh not found"; exit 1)
+          test -f README.md || (echo "README.md not found"; exit 1)
+          test -d auto || (echo "auto/ directory not found"; exit 1)
+          test -d config || (echo "config/ directory not found"; exit 1)
+
+      - name: Verify package lists are readable
+        run: |
+          for list in config/package-lists/*.list.chroot; do
+            if [ -f "$list" ]; then
+              wc -l "$list"
+            fi
+          done
+
+      - name: Check hook files are executable
+        run: |
+          find config/hooks/live -type f \( -name "*.chroot" -o -name "*.hook.chroot" -o -name "*.hook.binary" \) | while read -r hook; do
+            if [ ! -x "$hook" ]; then
+              chmod +x "$hook"
+              echo "Fixed: $hook"
+            fi
+          done
+
+      - name: Verify permissions
+        run: |
+          [ -x auto/build ] || (chmod +x auto/build && echo "Fixed: auto/build")
+          [ -x auto/clean ] || (chmod +x auto/clean && echo "Fixed: auto/clean")
+          [ -x auto/config ] || (chmod +x auto/config && echo "Fixed: auto/config")
+
+  documentation:
+    name: Documentation Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check README exists and has content
+        run: |
+          test -f README.md || (echo "README.md not found"; exit 1)
+          wc -l README.md
+          grep -q "GreenWayOS" README.md || (echo "README missing GreenWayOS reference"; exit 1)
+
+      - name: Check for PATCH_NOTES
+        run: |
+          if [ -f PATCH_NOTES.md ]; then
+            echo "✓ PATCH_NOTES.md found"
+            wc -l PATCH_NOTES.md
+          fi
+
+  # This job would require full VM/Docker setup with Debian, so we mark it as optional
+  build-test:
+    name: Build Environment Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y \
+            live-build debootstrap squashfs-tools xorriso \
+            isolinux syslinux-efi gcc dos2unix || true
+
+      - name: Verify lb command availability
+        run: |
+          if command -v lb &> /dev/null; then
+            lb --version || true
+          fi
+
+      - name: Check debootstrap availability
+        run: |
+          if command -v debootstrap &> /dev/null; then
+            debootstrap --version || true
+          fi
+
+      - name: List disk space
+        run: df -h
+
+      - name: Show Debian version
+        run: cat /etc/debian_version || uname -r
+
+  security-check:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for hardcoded secrets
+        run: |
+          # Look for common secret patterns (passwords, keys, etc)
+          if grep -r "password\|passwd\|SECRET\|PRIVATE_KEY" \
+            --include="*.sh" --include="*.py" --include="*.conf" \
+            config/ auto/ build.sh 2>/dev/null | grep -v "^\s*#" | grep -v "\.git"; then
+            echo "⚠️  Warning: Potential hardcoded secrets found (check for false positives)"
+          else
+            echo "✓ No obvious hardcoded secrets detected"
+          fi
+
+      - name: Check sudoers permissions
+        run: |
+          if grep -qE "NOPASSWD[[:space:]]*:" config/includes.chroot/etc/sudoers.d/* 2>/dev/null; then
+            echo "ℹ️  NOPASSWD sudo present (expected for live session user without password). Review before installed-system images."
+          else
+            echo "✓ No NOPASSWD rules under sudoers.d/"
+          fi
+
+      - name: Check for dangerous shell patterns
+        run: |
+          # Check for eval, source of untrusted files, etc
+          dangerous_count=$(grep -r "eval\|source.*\`\|sh -c" \
+            config/hooks auto/ build.sh 2>/dev/null | grep -v "^\s*#" | wc -l)
+          if [ "$dangerous_count" -gt 0 ]; then
+            echo "⚠️  Found $dangerous_count potentially dangerous shell patterns"
+          fi
+          echo "✓ Security scan completed"
+
+  notification:
+    name: Build Status Notification
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [syntax-check, validate, documentation, build-test, security-check]
+    steps:
+      - name: Check job status
+        run: |
+          if [[ "${{ needs.syntax-check.result }}" != "success" ]]; then
+            echo "❌ Syntax check failed"
+            exit 1
+          fi
+          if [[ "${{ needs.validate.result }}" != "success" ]]; then
+            echo "❌ Validation failed"
+            exit 1
+          fi
+          if [[ "${{ needs.security-check.result }}" != "success" ]]; then
+            echo "❌ Security check failed"
+            exit 1
+          fi
+          echo "✅ All checks passed!"

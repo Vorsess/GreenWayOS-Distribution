@@ -1,0 +1,16 @@
+[Unit]
+Description=GreenWayOS first-run setup
+ConditionPathExists=!/etc/greenwayos-firstboot-done
+ConditionPathExists=!/run/greenwayos/install
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/greenwayos-firstboot --service
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
+

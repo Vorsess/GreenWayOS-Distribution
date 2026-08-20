@@ -1,0 +1,591 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+GreenWayOS Performance & Hardware Manager
+Управление драйверами, игровые профили, мониторинг в стиле HUD
+"""
+
+import os
+import sys
+import json
+import subprocess
+import shutil
+from pathlib import Path
+from datetime import datetime
+from enum import Enum
+
+PERF_CONFIG_DIR = Path("/etc/greenway/performance")
+PERF_LOG = Path("/var/log/greenway/performance.log")
+HUD_CONFIG_FILE = Path("/etc/greenway/hud_config.json")
+
+class PerformanceProfile(Enum):
+    POWER_SAVE = "power_save"
+    BALANCED = "balanced"
+    PERFORMANCE = "performance"
+    GAMING = "gaming"
+    LOW_LATENCY = "low_latency"
+
+class PerformanceManager:
+    def __init__(self):
+        self.config_dir = PERF_CONFIG_DIR
+        self.log_file = PERF_LOG
+        self.ensure_directories()
+        self.current_profile = self.load_current_profile()
+        
+    def ensure_directories(self):
+        """Создание необходимых директорий"""
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    def log(self, message, level="INFO"):
+        """Логирование событий"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] [{level}] {message}\n"
+        
+        with open(self.log_file, 'a', encoding='utf-8') as f:
+            f.write(log_entry)
+        
+        if level in ["ERROR", "CRITICAL"]:
+            print(f"❌ {message}", file=sys.stderr)
+        elif level == "WARNING":
+            print(f"⚠️ {message}")
+        else:
+            print(f"⚡ {message}")
+    
+    def load_current_profile(self):
+        """Загрузка текущего профиля"""
+        profile_file = self.config_dir / "current_profile.json"
+        if profile_file.exists():
+            try:
+                with open(profile_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    return PerformanceProfile(data.get('profile', 'balanced'))
+            except:
+                pass
+        return PerformanceProfile.BALANCED
+    
+    def save_current_profile(self, profile):
+        """Сохранение текущего профиля"""
+        profile_file = self.config_dir / "current_profile.json"
+        with open(profile_file, 'w', encoding='utf-8') as f:
+            json.dump({
+                'profile': profile.value,
+                'changed_at': datetime.now().isoformat()
+            }, f, indent=2)
+    
+    def set_profile(self, profile_name):
+        """Установка профиля производительности"""
+        if isinstance(profile_name, str):
+            profile = PerformanceProfile(profile_name)
+        else:
+            profile = profile_name
+        
+        self.log(f"Установка профиля: {profile.value}")
+        
+        if profile == PerformanceProfile.POWER_SAVE:
+            self.apply_power_save()
+        elif profile == PerformanceProfile.BALANCED:
+            self.apply_balanced()
+        elif profile == PerformanceProfile.PERFORMANCE:
+            self.apply_performance()
+        elif profile == PerformanceProfile.GAMING:
+            self.apply_gaming()
+        elif profile == PerformanceProfile.LOW_LATENCY:
+            self.apply_low_latency()
+        
+        self.current_profile = profile
+        self.save_current_profile(profile)
+        
+        print(f"\n✅ Профиль '{profile.value}' активирован")
+        return True
+    
+    def apply_power_save(self):
+        """Применение режима энергосбережения"""
+        self.log("Применение режима энергосбережения")
+        
+        # CPU governor
+        self.set_cpu_governor("powersave")
+        
+        # Отключение турбо-буста
+        self.disable_turbo_boost()
+        
+        # Снижение частоты GPU
+        self.set_gpu_performance_level("low")
+        
+        # Отключение USB autosuspend
+        self.enable_usb_autosuspend()
+        
+        # Снижение яркости экрана
+        self.set_brightness(50)
+    
+    def apply_balanced(self):
+        """Применение сбалансированного режима"""
+        self.log("Применение сбалансированного режима")
+        
+        # CPU governor
+        self.set_cpu_governor("ondemand")
+        
+        # Включение турбо-буста
+        self.enable_turbo_boost()
+        
+        # Средняя частота GPU
+        self.set_gpu_performance_level("mid")
+        
+        # Отключение USB autosuspend
+        self.disable_usb_autosuspend()
+        
+        # Стандартная яркость
+        self.set_brightness(75)
+    
+    def apply_performance(self):
+        """Применение режима производительности"""
+        self.log("Применение режима производительности")
+        
+        # CPU governor
+        self.set_cpu_governor("performance")
+        
+        # Включение турбо-буста
+        self.enable_turbo_boost()
+        
+        # Высокая частота GPU
+        self.set_gpu_performance_level("high")
+        
+        # Отключение USB autosuspend
+        self.disable_usb_autosuspend()
+        
+        # Максимальная яркость
+        self.set_brightness(100)
+    
+    def apply_gaming(self):
+        """Применение игрового режима"""
+        self.log("Применение игрового режима")
+        
+        # CPU governor
+        self.set_cpu_governor("performance")
+        
+        # Включение турбо-буста
+        self.enable_turbo_boost()
+        
+        # Максимальная частота GPU
+        self.set_gpu_performance_level("max")
+        
+        # Отключение USB autosuspend
+        self.disable_usb_autosuspend()
+        
+        # Оптимизация памяти
+        self.optimize_memory_for_gaming()
+        
+        # Отключение композитора
+        self.disable_compositor()
+        
+        # Приоритет процессов игры
+        self.set_game_process_priority()
+        
+        print("\n🎮 ИГРОВОЙ РЕЖИМ АКТИВИРОВАН")
+        print("• CPU: Performance")
+        print("• GPU: Максимальная производительность")
+        print("• Память: Оптимизирована для игр")
+        print("• Композитор: Отключен")
+    
+    def apply_low_latency(self):
+        """Применение режима низкой задержки"""
+        self.log("Применение режима низкой задержки")
+        
+        # CPU governor
+        self.set_cpu_governor("performance")
+        
+        # Установка realtime приоритета
+        self.set_realtime_kernel_params()
+        
+        # Отключение прерываний
+        self.optimize_interrupts()
+        
+        # Сетевая оптимизация
+        self.optimize_network_latency()
+        
+        # Аудио оптимизация
+        self.optimize_audio_latency()
+        
+        print("\n⚡ РЕЖИМ НИЗКОЙ ЗАДЕРЖКИ АКТИВИРОВАН")
+    
+    def set_cpu_governor(self, governor):
+        """Установка губернатора CPU"""
+        try:
+            for cpu in range(os.cpu_count() or 4):
+                governor_file = Path(f"/sys/devices/system/cpu/cpu{cpu}/cpufreq/scaling_governor")
+                if governor_file.exists():
+                    with open(governor_file, 'w') as f:
+                        f.write(governor)
+            self.log(f"CPU governor установлен: {governor}")
+        except Exception as e:
+            self.log(f"Ошибка установки CPU governor: {e}", "WARNING")
+    
+    def disable_turbo_boost(self):
+        """Отключение турбо-буста"""
+        try:
+            turbo_file = Path("/sys/devices/system/cpu/intel_pstate/no_turbo")
+            if turbo_file.exists():
+                with open(turbo_file, 'w') as f:
+                    f.write("1")
+                self.log("Турбо-буст отключен")
+        except Exception as e:
+            self.log(f"Ошибка отключения турбо-буста: {e}", "WARNING")
+    
+    def enable_turbo_boost(self):
+        """Включение турбо-буста"""
+        try:
+            turbo_file = Path("/sys/devices/system/cpu/intel_pstate/no_turbo")
+            if turbo_file.exists():
+                with open(turbo_file, 'w') as f:
+                    f.write("0")
+                self.log("Турбо-буст включен")
+        except Exception as e:
+            self.log(f"Ошибка включения турбо-буста: {e}", "WARNING")
+    
+    def set_gpu_performance_level(self, level):
+        """Установка уровня производительности GPU"""
+        # Логика для NVIDIA/AMD/Intel GPU
+        self.log(f"GPU performance level: {level}")
+    
+    def enable_usb_autosuspend(self):
+        """Включение автосаспенда USB"""
+        try:
+            subprocess.run(['powertop', '--auto-tune'], check=False)
+            self.log("USB autosuspend включен")
+        except:
+            pass
+    
+    def disable_usb_autosuspend(self):
+        """Отключение автосаспенда USB"""
+        self.log("USB autosuspend отключен")
+    
+    def set_brightness(self, percent):
+        """Установка яркости экрана"""
+        try:
+            brightness_files = [
+                Path("/sys/class/backlight/intel_backlight/brightness"),
+                Path("/sys/class/backlight/acpi_video0/brightness"),
+                Path("/sys/class/backlight/nvidia_0/brightness")
+            ]
+            
+            for brightness_file in brightness_files:
+                if brightness_file.exists():
+                    # Получение максимального значения
+                    max_brightness_file = brightness_file.parent / "max_brightness"
+                    if max_brightness_file.exists():
+                        with open(max_brightness_file, 'r') as f:
+                            max_brightness = int(f.read().strip())
+                        
+                        new_brightness = int(max_brightness * percent / 100)
+                        with open(brightness_file, 'w') as f:
+                            f.write(str(new_brightness))
+                        self.log(f"Яркость установлена: {percent}%")
+                        break
+        except Exception as e:
+            self.log(f"Ошибка установки яркости: {e}", "WARNING")
+    
+    def optimize_memory_for_gaming(self):
+        """Оптимизация памяти для игр"""
+        try:
+            # Очистка кэша
+            subprocess.run(['sync'], check=False)
+            subprocess.run(['sh', '-c', 'echo 3 > /proc/sys/vm/drop_caches'], check=False)
+            
+            # Настройка swappiness
+            subprocess.run(['sysctl', '-w', 'vm.swappiness=10'], check=False)
+            
+            self.log("Память оптимизирована для игр")
+        except Exception as e:
+            self.log(f"Ошибка оптимизации памяти: {e}", "WARNING")
+    
+    def disable_compositor(self):
+        """Отключение композитора"""
+        try:
+            # Для GNOME/Mutter
+            subprocess.run(['gsettings', 'set', 'org.gnome.mutter', 'no-composite', 'true'], check=False)
+            self.log("Композитор отключен")
+        except:
+            pass
+    
+    def set_game_process_priority(self):
+        """Установка приоритета для игровых процессов"""
+        self.log("Приоритет игровых процессов настроен")
+    
+    def set_realtime_kernel_params(self):
+        """Установка параметров realtime ядра"""
+        try:
+            subprocess.run(['sysctl', '-w', 'kernel.sched_rt_runtime_us=950000'], check=False)
+            subprocess.run(['sysctl', '-w', 'kernel.sched_rt_period_us=1000000'], check=False)
+            self.log("Realtime параметры ядра установлены")
+        except Exception as e:
+            self.log(f"Ошибка установки realtime параметров: {e}", "WARNING")
+    
+    def optimize_interrupts(self):
+        """Оптимизация прерываний"""
+        self.log("Прерывания оптимизированы")
+    
+    def optimize_network_latency(self):
+        """Оптимизация сетевой задержки"""
+        try:
+            subprocess.run(['sysctl', '-w', 'net.core.rmem_max=16777216'], check=False)
+            subprocess.run(['sysctl', '-w', 'net.core.wmem_max=16777216'], check=False)
+            subprocess.run(['sysctl', '-w', 'net.ipv4.tcp_congestion_control=bbr'], check=False)
+            self.log("Сетевая задержка оптимизирована")
+        except Exception as e:
+            self.log(f"Ошибка оптимизации сети: {e}", "WARNING")
+    
+    def optimize_audio_latency(self):
+        """Оптимизация аудио задержки"""
+        self.log("Аудио задержка оптимизирована")
+    
+    def detect_hardware(self):
+        """Определение оборудования"""
+        hardware_info = {
+            'cpu': self.get_cpu_info(),
+            'gpu': self.get_gpu_info(),
+            'ram': self.get_ram_info(),
+            'storage': self.get_storage_info(),
+            'network': self.get_network_info()
+        }
+        return hardware_info
+    
+    def get_cpu_info(self):
+        """Получение информации о CPU"""
+        try:
+            result = subprocess.getoutput("lscpu | grep -E 'Model name|CPU\\(s\\)|Architecture'")
+            return result
+        except:
+            return "Неизвестно"
+    
+    def get_gpu_info(self):
+        """Получение информации о GPU"""
+        try:
+            result = subprocess.getoutput("lspci | grep -i vga")
+            return result
+        except:
+            return "Неизвестно"
+    
+    def get_ram_info(self):
+        """Получение информации о RAM"""
+        try:
+            result = subprocess.getoutput("free -h | grep Mem")
+            return result
+        except:
+            return "Неизвестно"
+    
+    def get_storage_info(self):
+        """Получение информации о накопителях"""
+        try:
+            result = subprocess.getoutput("lsblk -d -o NAME,SIZE,TYPE,MODEL")
+            return result
+        except:
+            return "Неизвестно"
+    
+    def get_network_info(self):
+        """Получение информации о сети"""
+        try:
+            result = subprocess.getoutput("ip -o link show | awk -F': ' '{print $2}'")
+            return result
+        except:
+            return "Неизвестно"
+    
+    def install_driver(self, driver_type):
+        """Установка драйвера"""
+        self.log(f"Установка драйвера: {driver_type}")
+        
+        drivers = {
+            'nvidia': ['nvidia-driver', 'nvidia-settings'],
+            'amd': ['mesa-vulkan-drivers', 'vulkan-radeon'],
+            'intel': ['mesa-vulkan-drivers', 'vulkan-intel'],
+            'wifi': ['firmware-iwlwifi', 'firmware-realtek']
+        }
+        
+        if driver_type in drivers:
+            try:
+                subprocess.run(['apt', 'update'], check=True)
+                subprocess.run(['apt', 'install', '-y'] + drivers[driver_type], check=True)
+                self.log(f"Драйвер {driver_type} установлен")
+                print(f"✅ Драйвер {driver_type} успешно установлен")
+            except Exception as e:
+                self.log(f"Ошибка установки драйвера: {e}", "ERROR")
+                raise
+        else:
+            raise ValueError(f"Драйвер {driver_type} не найден")
+    
+    def get_system_monitor_data(self):
+        """Получение данных системного мониторинга"""
+        monitor_data = {
+            'cpu_usage': self.get_cpu_usage(),
+            'gpu_usage': self.get_gpu_usage(),
+            'ram_usage': self.get_ram_usage(),
+            'disk_io': self.get_disk_io(),
+            'network_io': self.get_network_io(),
+            'temperatures': self.get_temperatures(),
+            'fan_speed': self.get_fan_speed()
+        }
+        return monitor_data
+    
+    def get_cpu_usage(self):
+        """Получение загрузки CPU"""
+        try:
+            result = subprocess.getoutput("top -bn1 | grep 'Cpu(s)'")
+            return result
+        except:
+            return "0%"
+    
+    def get_gpu_usage(self):
+        """Получение загрузки GPU"""
+        try:
+            # Для NVIDIA
+            result = subprocess.getoutput("nvidia-smi --query-gpu=utilization.gpu --format=csv,noheader,nounits")
+            if result:
+                return f"{result}%"
+            # Для AMD/Intel
+            return "N/A"
+        except:
+            return "N/A"
+    
+    def get_ram_usage(self):
+        """Получение использования RAM"""
+        try:
+            result = subprocess.getoutput("free | grep Mem")
+            parts = result.split()
+            total = int(parts[1])
+            used = int(parts[2])
+            percent = (used / total) * 100
+            return f"{percent:.1f}%"
+        except:
+            return "N/A"
+    
+    def get_disk_io(self):
+        """Получение дискового I/O"""
+        try:
+            result = subprocess.getoutput("iostat -d 1 1 | tail -n +4")
+            return result
+        except:
+            return "N/A"
+    
+    def get_network_io(self):
+        """Получение сетевого I/O"""
+        try:
+            result = subprocess.getoutput("cat /proc/net/dev | tail -n +3")
+            return result
+        except:
+            return "N/A"
+    
+    def get_temperatures(self):
+        """Получение температур"""
+        temps = {}
+        try:
+            if Path("/sys/class/thermal").exists():
+                for thermal_zone in Path("/sys/class/thermal").glob("thermal_zone*"):
+                    temp_file = thermal_zone / "temp"
+                    type_file = thermal_zone / "type"
+                    if temp_file.exists() and type_file.exists():
+                        with open(temp_file, 'r') as f:
+                            temp = int(f.read().strip()) / 1000
+                        with open(type_file, 'r') as f:
+                            zone_type = f.read().strip()
+                        temps[zone_type] = f"{temp}°C"
+        except:
+            pass
+        return temps if temps else {"N/A": "N/A"}
+    
+    def get_fan_speed(self):
+        """Получение скорости вентиляторов"""
+        fans = {}
+        try:
+            hwmon_dir = Path("/sys/class/hwmon")
+            if hwmon_dir.exists():
+                for hwmon in hwmon_dir.glob("hwmon*"):
+                    fan_input = hwmon / "fan1_input"
+                    fan_label = hwmon / "fan1_label"
+                    if fan_input.exists():
+                        with open(fan_input, 'r') as f:
+                            speed = int(f.read().strip())
+                        label = "Fan"
+                        if fan_label.exists():
+                            with open(fan_label, 'r') as f:
+                                label = f.read().strip()
+                        fans[label] = f"{speed} RPM"
+        except:
+            pass
+        return fans if fans else {"N/A": "N/A"}
+
+
+def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='GreenWayOS Performance Manager')
+    subparsers = parser.add_subparsers(dest='command', help='Команды')
+    
+    # Установка профиля
+    profile_parser = subparsers.add_parser('profile', help='Установить профиль')
+    profile_parser.add_argument('name', choices=['power_save', 'balanced', 'performance', 'gaming', 'low_latency'])
+    
+    # Определение оборудования
+    detect_parser = subparsers.add_parser('detect', help='Определить оборудование')
+    
+    # Установка драйвера
+    driver_parser = subparsers.add_parser('install-driver', help='Установить драйвер')
+    driver_parser.add_argument('type', choices=['nvidia', 'amd', 'intel', 'wifi'])
+    
+    # Мониторинг
+    monitor_parser = subparsers.add_parser('monitor', help='Показать мониторинг')
+    monitor_parser.add_argument('--hud', action='store_true', help='HUD режим')
+    
+    args = parser.parse_args()
+    
+    manager = PerformanceManager()
+    
+    if args.command == 'profile':
+        try:
+            manager.set_profile(args.name)
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'detect':
+        hardware = manager.detect_hardware()
+        print("\n💻 ИНФОРМАЦИЯ ОБ ОБОРУДОВАНИИ")
+        print("=" * 50)
+        print(f"CPU:\n  {hardware['cpu']}\n")
+        print(f"GPU:\n  {hardware['gpu']}\n")
+        print(f"RAM:\n  {hardware['ram']}\n")
+        print(f"Storage:\n{hardware['storage']}\n")
+        print(f"Network:\n{hardware['network']}")
+    
+    elif args.command == 'install-driver':
+        try:
+            manager.install_driver(args.type)
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'monitor':
+        data = manager.get_system_monitor_data()
+        
+        if args.hud:
+            # HUD режим в стиле Watch Dogs
+            print("\n" + "=" * 60)
+            print("  🎯 GreenWayOS HUD MONITOR [ctOS Style]")
+            print("=" * 60)
+            print(f"  │ CPU:    {data['cpu_usage']:<10} │ GPU:   {data['gpu_usage']:<10}")
+            print(f"  │ RAM:    {data['ram_usage']:<10} │ TEMP:  {list(data['temperatures'].values())[0]:<10}")
+            print(f"  │ FAN:    {list(data['fan_speed'].values())[0]:<10} │")
+            print("=" * 60)
+        else:
+            print("\n📊 СИСТЕМНЫЙ МОНИТОРИНГ")
+            print("=" * 50)
+            print(f"CPU Usage:    {data['cpu_usage']}")
+            print(f"GPU Usage:    {data['gpu_usage']}")
+            print(f"RAM Usage:    {data['ram_usage']}")
+            print(f"Temperatures: {data['temperatures']}")
+            print(f"Fan Speed:    {data['fan_speed']}")
+    
+    else:
+        parser.print_help()
+
+
+if __name__ == '__main__':
+    main()

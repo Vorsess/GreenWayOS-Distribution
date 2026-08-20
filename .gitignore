@@ -1,0 +1,28 @@
+```
+# Configuration and cache directories
+.config/
+.xdg/
+.cache/
+
+# Temporary and backup files
+*~
+*.bak
+*.tmp
+
+# Logs
+*.log
+
+# Environment-specific files
+.env
+.env.local
+*.env.*
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Build artifacts (if any)
+dist/
+build/
+target/
+```

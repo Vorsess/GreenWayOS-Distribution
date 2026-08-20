@@ -1,0 +1,313 @@
+#!/usr/bin/env python3
+import tkinter as tk
+from tkinter import font
+import os
+import subprocess
+import shutil
+import logging
+import sys
+import datetime
+import shlex
+from logging.handlers import RotatingFileHandler
+
+# ── Setup logging with rotation ────────────────────────────────────
+LOG_FILE = "/var/log/greenwayos-welcome.log"
+LOG_MAX_SIZE = 5 * 1024 * 1024  # 5 MB
+LOG_BACKUP_COUNT = 5
+
+try:
+    os.makedirs(os.path.dirname(LOG_FILE) or '.', exist_ok=True)
+except Exception as e:
+    print(f"Warning: Could not create log directory: {e}", file=sys.stderr)
+    LOG_FILE = None
+
+if LOG_FILE:
+    handler = RotatingFileHandler(
+        LOG_FILE,
+        maxBytes=LOG_MAX_SIZE,
+        backupCount=LOG_BACKUP_COUNT
+    )
+    formatter = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(funcName)s: %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    handler.setFormatter(formatter)
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.DEBUG)
+    logger.addHandler(handler)
+else:
+    # Fallback to stderr if log file unavailable
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format="%(asctime)s [%(levelname)s] %(message)s"
+    )
+    logger = logging.getLogger(__name__)
+
+logger.info("=" * 60)
+logger.info("GreenWayOS Welcome App started")
+logger.info(f"Python: {sys.version}")
+logger.info(f"PID: {os.getpid()}")
+logger.info(f"DISPLAY: {os.environ.get('DISPLAY', 'NOT SET')}")
+logger.info(f"XAUTHORITY: {os.environ.get('XAUTHORITY', 'NOT SET')}")
+
+
+def read_kernel_cmdline():
+    try:
+        with open("/proc/cmdline", "r", encoding="ascii", errors="ignore") as f:
+            return f.read()
+    except OSError:
+        return ""
+
+
+def should_show_installer_button():
+    """
+    Show install button when ISO was booted with installer kernel params
+    OR when we're running inside a live system (fallback: always show).
+    """
+    cmdline = read_kernel_cmdline()
+    # Show if any install flag present, or if we're in a live environment
+    if (
+        "greenwayos.install=1" in cmdline
+        or "greenwayos.gui_install=1" in cmdline
+        or os.path.exists("/run/greenwayos/install")
+    ):
+        return True
+    # Fallback: show if /run/live/medium exists (we're definitely on live ISO)
+    if os.path.exists("/run/live/medium"):
+        return True
+    return False
+
+
+def get_terminal_emulator():
+    """Get available terminal emulator. Fallback to xterm."""
+    logger.debug("Detecting terminal emulator...")
+    for term in ["terminator", "xfce4-terminal", "xterm", "gnome-terminal"]:
+        if shutil.which(term):
+            logger.info(f"Found available terminal: {term}")
+            return term
+    logger.warning("No preferred terminal found, using xterm as fallback")
+    return "xterm"
+
+
+def build_installer_env():
+    """
+    Build environment for the GUI installer process.
+    Ensures DISPLAY and XAUTHORITY are correctly passed to root process.
+    """
+    env = os.environ.copy()
+
+    # Make sure DISPLAY is set
+    if not env.get("DISPLAY"):
+        env["DISPLAY"] = ":0"
+        logger.warning("DISPLAY was not set; defaulting to :0")
+
+    # If XAUTHORITY not set, try common locations
+    if not env.get("XAUTHORITY"):
+        home = env.get("HOME", "/root")
+        candidates = [
+            os.path.join(home, ".Xauthority"),
+            "/tmp/.Xauthority",
+            f"/home/user/.Xauthority",
+            "/run/user/1000/Xauthority",
+        ]
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                env["XAUTHORITY"] = candidate
+                logger.info(f"Found XAUTHORITY at: {candidate}")
+                break
+        else:
+            logger.warning("Could not find XAUTHORITY file; X11 auth may fail")
+
+    logger.info(f"Installer env: DISPLAY={env.get('DISPLAY')} XAUTHORITY={env.get('XAUTHORITY','<not set>')}")
+    return env
+
+
+def allow_root_x11_access():
+    """
+    Grant root access to the current X11 display so that sudo-launched
+    processes (running as root) can connect to the X server.
+    """
+    display = os.environ.get("DISPLAY", ":0")
+    try:
+        result = subprocess.run(
+            ["xhost", "+local:root"],
+            capture_output=True, text=True, timeout=3
+        )
+        if result.returncode == 0:
+            logger.info(f"xhost +local:root succeeded on {display}")
+        else:
+            logger.warning(f"xhost returned {result.returncode}: {result.stderr.strip()}")
+    except FileNotFoundError:
+        logger.warning("xhost not found; skipping X11 access grant")
+    except Exception as e:
+        logger.warning(f"xhost failed: {e}")
+
+
+def launch_dashboard():
+    try:
+        logger.info("User clicked: System Dashboard")
+        terminal = get_terminal_emulator()
+        logger.info(f"Launching sys-dashboard with {terminal}")
+        subprocess.Popen([terminal, "-e", "sys-dashboard"])
+        logger.info("Dashboard process started successfully")
+    except Exception as e:
+        logger.error(f"Failed to launch dashboard: {e}", exc_info=True)
+        try:
+            logger.info("Attempting fallback to xterm...")
+            subprocess.Popen(["xterm", "-e", "sys-dashboard"])
+            logger.info("Fallback dashboard launched")
+        except Exception as e2:
+            logger.critical(f"Fallback xterm also failed: {e2}", exc_info=True)
+
+
+def launch_installer():
+    """
+    Launch the PyQt5 GUI installer as root.
+    Uses pkexec if available (shows polkit dialog), otherwise sudo WITHOUT -n
+    so it can prompt if needed. XAUTHORITY is explicitly forwarded.
+    """
+    gui = "/usr/local/bin/greenwayos-installer-gui"
+
+    if not os.path.isfile(gui):
+        logger.error(f"GUI installer not found: {gui}")
+        return
+
+    logger.info("User clicked: Install GreenWayOS to Disk")
+
+    # Grant root X11 access before launching
+    allow_root_x11_access()
+
+    env = build_installer_env()
+
+    # If already running as root, launch directly
+    if os.geteuid() == 0:
+        logger.info("Already root — launching installer directly")
+        try:
+            subprocess.Popen([gui], env=env, start_new_session=True)
+        except Exception as e:
+            logger.error(f"Direct launch failed: {e}", exc_info=True)
+        return
+
+    # Try sudo WITHOUT -n (allows password prompt if needed)
+    # -E preserves the environment (DISPLAY, XAUTHORITY, LANG, etc.)
+    logger.info("Launching GUI installer via sudo -E (no -n flag)")
+    try:
+        subprocess.Popen(
+            ["sudo", "-E", gui],
+            env=env,
+            start_new_session=True,
+        )
+        logger.info("sudo -E launch initiated")
+        return
+    except Exception as e:
+        logger.error(f"sudo -E launch failed: {e}", exc_info=True)
+
+    # Last resort: open a terminal and run from there
+    terminal = get_terminal_emulator()
+    logger.warning(f"Falling back to terminal launch via {terminal}")
+    try:
+        cmd_str = f"sudo -E {shlex.quote(gui)}"
+        if terminal == "terminator":
+            subprocess.Popen([terminal, "-x", "bash", "-c", cmd_str], env=env)
+        else:
+            subprocess.Popen([terminal, "-e", cmd_str], env=env)
+    except Exception as e:
+        logger.critical(f"All launch methods failed: {e}", exc_info=True)
+
+
+def launch_terminal():
+    try:
+        logger.info("User clicked: Open Terminal")
+        terminal = get_terminal_emulator()
+        logger.info(f"Launching terminal: {terminal}")
+        subprocess.Popen([terminal])
+        logger.info("Terminal process started successfully")
+    except Exception as e:
+        logger.error(f"Failed to launch terminal: {e}", exc_info=True)
+
+
+def on_window_close():
+    """Handle window close event."""
+    logger.info("Welcome window closed")
+    logger.info("=" * 60)
+    root.destroy()
+
+
+root = tk.Tk()
+root.title("Welcome to GreenWayOS")
+root.geometry("650x450")
+root.configure(bg="#0D0D0D")
+root.protocol("WM_DELETE_WINDOW", on_window_close)
+
+logger.info("Tkinter window created")
+
+header_font = font.Font(family="Hack", size=32, weight="bold")
+btn_font = font.Font(family="Hack", size=14)
+
+label = tk.Label(root, text="GreenWayOS", font=header_font, fg="#1DB954", bg="#0D0D0D")
+label.pack(pady=(40, 5))
+logger.debug("Header label added")
+
+sub = tk.Label(root, text="Systems Engineering Distribution", font=font.Font(family="Hack", size=14), fg="#AAAAAA", bg="#0D0D0D")
+sub.pack(pady=(0, 40))
+logger.debug("Subtitle label added")
+
+btn_params = {
+    "font": btn_font,
+    "bg": "#1A1A1A",
+    "fg": "#FFFFFF",
+    "activebackground": "#1DB954",
+    "activeforeground": "#000000",
+    "relief": "flat",
+    "width": 28,
+    "pady": 8,
+    "bd": 0,
+    "cursor": "hand2"
+}
+
+def on_enter(e):
+    e.widget['background'] = '#2C2C2C'
+    logger.debug(f"Mouse entered button: {e.widget.cget('text')}")
+
+def on_leave(e):
+    e.widget['background'] = '#1A1A1A'
+    logger.debug(f"Mouse left button: {e.widget.cget('text')}")
+
+b1 = tk.Button(root, text="System Dashboard", command=launch_dashboard, **btn_params)
+b1.pack(pady=10)
+b1.bind("<Enter>", on_enter)
+b1.bind("<Leave>", on_leave)
+logger.debug("Dashboard button added")
+
+
+# Определяем, нужно ли показывать кнопку установки
+show_install_btn = should_show_installer_button()
+logger.info(f"Show install button: {show_install_btn}")
+
+if show_install_btn:
+    b2 = tk.Button(root, text="Install GreenWayOS to Disk", command=launch_installer, **btn_params)
+    b2.pack(pady=10)
+    b2.bind("<Enter>", on_enter)
+    b2.bind("<Leave>", on_leave)
+    logger.debug("Installer button added")
+else:
+    logger.debug("Install button hidden (not a live install environment)")
+
+b3 = tk.Button(root, text="Open Terminal", command=launch_terminal, **btn_params)
+b3.pack(pady=10)
+b3.bind("<Enter>", on_enter)
+b3.bind("<Leave>", on_leave)
+logger.debug("Terminal button added")
+
+logger.info("UI fully initialized, displaying window")
+
+_hint = "Tip: Right-click desktop for app menu  |  Win+T opens terminal"
+if show_install_btn:
+    _hint = (
+        "Click 'Install GreenWayOS to Disk' to start the graphical installer  |  "
+        "Or: sudo greenwayos-installer in a terminal"
+    )
+lbl_hint = tk.Label(root, text=_hint, font=font.Font(family="Sans", size=10), fg="#666666", bg="#0D0D0D")
+lbl_hint.pack(side="bottom", pady=20)
+
+root.mainloop()

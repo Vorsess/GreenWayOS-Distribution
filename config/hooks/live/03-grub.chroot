@@ -1,0 +1,61 @@
+#!/bin/bash
+# chroot hook: GreenWayOS ctOS GRUB for Live chroot + installed-system seed
+set -euo pipefail
+
+trap 'echo "[ERROR] Hook failed at line $LINENO"; exit 1' ERR
+
+echo "[✓] Configuring GRUB..."
+
+if [ ! -f /etc/default/grub ]; then
+    echo "[✗] ERROR: /etc/default/grub not found"
+    exit 1
+fi
+
+sed -i 's/^GRUB_TIMEOUT=.*/GRUB_TIMEOUT=5/' /etc/default/grub || true
+if grep -q '^GRUB_DISTRIBUTOR=' /etc/default/grub; then
+    sed -i 's/^GRUB_DISTRIBUTOR=.*/GRUB_DISTRIBUTOR="GreenWayOS"/' /etc/default/grub
+else
+    echo 'GRUB_DISTRIBUTOR="GreenWayOS"' >> /etc/default/grub
+fi
+sed -i 's/^GRUB_CMDLINE_LINUX_DEFAULT=.*/GRUB_CMDLINE_LINUX_DEFAULT="quiet"/' /etc/default/grub || true
+
+THEME_DIR="/usr/share/grub/themes/GreenWay-ctOS"
+mkdir -p "$THEME_DIR" /boot/grub /etc/default/grub.d
+
+# Prefer dedicated background; fall back to ctOS wallpaper
+if [ ! -f "$THEME_DIR/background.png" ]; then
+    if [ -f /usr/share/greenwayos/ctos/wallpaper.png ]; then
+        cp -f /usr/share/greenwayos/ctos/wallpaper.png "$THEME_DIR/background.png" || true
+    elif [ -f /usr/share/greenwayos/ctos/wallpaper-lock.png ]; then
+        cp -f /usr/share/greenwayos/ctos/wallpaper-lock.png "$THEME_DIR/background.png" || true
+    fi
+fi
+
+if [ -f "$THEME_DIR/theme.txt" ]; then
+    if ! grep -q '^GRUB_THEME=' /etc/default/grub; then
+        echo 'GRUB_THEME="/usr/share/grub/themes/GreenWay-ctOS/theme.txt"' >> /etc/default/grub
+    else
+        sed -i 's|^GRUB_THEME=.*|GRUB_THEME="/usr/share/grub/themes/GreenWay-ctOS/theme.txt"|' /etc/default/grub
+    fi
+    if [ -f "$THEME_DIR/background.png" ]; then
+        if ! grep -q '^GRUB_BACKGROUND=' /etc/default/grub; then
+            echo 'GRUB_BACKGROUND="/usr/share/grub/themes/GreenWay-ctOS/background.png"' >> /etc/default/grub
+        else
+            sed -i 's|^GRUB_BACKGROUND=.*|GRUB_BACKGROUND="/usr/share/grub/themes/GreenWay-ctOS/background.png"|' /etc/default/grub
+        fi
+    fi
+    echo "[✓]   ✓ GRUB theme GreenWay-ctOS"
+else
+    echo "[⚠] WARNING: theme.txt missing — colors-only fallback" >&2
+fi
+
+# Fallback colors (used if theme fails to load)
+cat > /boot/grub/custom.cfg << 'EOF'
+set menu_color_normal=cyan/black
+set menu_color_highlight=black/cyan
+set color_normal=cyan/black
+set color_highlight=black/cyan
+EOF
+echo "[✓]   ✓ GRUB custom colors (cyan/black)"
+
+echo "[✓] GRUB configuration completed"

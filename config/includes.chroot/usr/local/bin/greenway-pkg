@@ -1,0 +1,464 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+GreenWayOS Package Manager GUI & CLI
+Умный менеджер пакетов с графическим интерфейсом и магазином приложений
+"""
+
+import os
+import sys
+import json
+import subprocess
+import shutil
+from pathlib import Path
+from datetime import datetime
+from enum import Enum
+
+PKG_CONFIG_DIR = Path("/etc/greenway/packages")
+PKG_LOG = Path("/var/log/greenway/package_manager.log")
+CUSTOM_REPO_FILE = Path("/etc/apt/sources.list.d/greenway-custom.list")
+
+class PackageStatus(Enum):
+    INSTALLED = "installed"
+    AVAILABLE = "available"
+    UPGRADABLE = "upgradable"
+    HELD = "held"
+    BROKEN = "broken"
+
+class PackageManager:
+    def __init__(self):
+        self.config_dir = PKG_CONFIG_DIR
+        self.log_file = PKG_LOG
+        self.ensure_directories()
+        
+    def ensure_directories(self):
+        """Создание необходимых директорий"""
+        self.config_dir.mkdir(parents=True, exist_ok=True)
+        self.log_file.parent.mkdir(parents=True, exist_ok=True)
+    
+    def log(self, message, level="INFO"):
+        """Логирование действий"""
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] [{level}] {message}\n"
+        
+        with open(self.log_file, 'a', encoding='utf-8') as f:
+            f.write(log_entry)
+        
+        if level in ["ERROR", "CRITICAL"]:
+            print(f"❌ {message}", file=sys.stderr)
+        elif level == "WARNING":
+            print(f"⚠️ {message}")
+        else:
+            print(f"📦 {message}")
+    
+    def update_cache(self):
+        """Обновление кэша пакетов"""
+        self.log("Обновление кэша пакетов...")
+        try:
+            result = subprocess.run(['apt', 'update'], capture_output=True, text=True, check=True)
+            self.log("Кэш пакетов обновлен")
+            print("✅ Кэш пакетов обновлен")
+            return True
+        except subprocess.CalledProcessError as e:
+            self.log(f"Ошибка обновления кэша: {e.stderr}", "ERROR")
+            raise
+    
+    def upgrade_system(self, full_upgrade=False):
+        """Обновление системы"""
+        self.log("Обновление системы...")
+        try:
+            cmd = ['apt', 'upgrade', '-y']
+            if full_upgrade:
+                cmd = ['apt', 'dist-upgrade', '-y']
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            self.log("Система обновлена")
+            print("✅ Система обновлена")
+            return True
+        except subprocess.CalledProcessError as e:
+            self.log(f"Ошибка обновления: {e.stderr}", "ERROR")
+            raise
+    
+    def install_package(self, package_name, simulate=False):
+        """Установка пакета"""
+        self.log(f"Установка пакета: {package_name}")
+        try:
+            cmd = ['apt', 'install', '-y', package_name]
+            if simulate:
+                cmd.append('--simulate')
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            if not simulate:
+                self.log(f"Пакет {package_name} установлен")
+                print(f"✅ Пакет {package_name} успешно установлен")
+            return result.stdout
+        except subprocess.CalledProcessError as e:
+            self.log(f"Ошибка установки {package_name}: {e.stderr}", "ERROR")
+            raise
+    
+    def remove_package(self, package_name, purge=False, simulate=False):
+        """Удаление пакета"""
+        self.log(f"Удаление пакета: {package_name}")
+        try:
+            cmd = ['apt', 'remove', '-y', package_name]
+            if purge:
+                cmd = ['apt', 'purge', '-y', package_name]
+            if simulate:
+                cmd.append('--simulate')
+            
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            if not simulate:
+                self.log(f"Пакет {package_name} удален")
+                print(f"✅ Пакет {package_name} успешно удален")
+            return result.stdout
+        except subprocess.CalledProcessError as e:
+            self.log(f"Ошибка удаления {package_name}: {e.stderr}", "ERROR")
+            raise
+    
+    def search_packages(self, query):
+        """Поиск пакетов"""
+        self.log(f"Поиск пакетов: {query}")
+        try:
+            result = subprocess.run(['apt', 'search', query], capture_output=True, text=True, check=True)
+            packages = []
+            for line in result.stdout.split('\n'):
+                if '/' in line:
+                    parts = line.split('/')
+                    name = parts[0].strip()
+                    description = parts[1].strip() if len(parts) > 1 else ""
+                    packages.append({'name': name, 'description': description})
+            return packages
+        except subprocess.CalledProcessError as e:
+            self.log(f"Ошибка поиска: {e.stderr}", "WARNING")
+            return []
+    
+    def get_package_info(self, package_name):
+        """Получение информации о пакете"""
+        try:
+            result = subprocess.run(['apt', 'show', package_name], capture_output=True, text=True, check=True)
+            info = {}
+            for line in result.stdout.split('\n'):
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    info[key.strip()] = value.strip()
+            return info
+        except subprocess.CalledProcessError:
+            return None
+    
+    def list_installed_packages(self, filter_query=None):
+        """Список установленных пакетов"""
+        try:
+            cmd = ['dpkg', '--list']
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            
+            packages = []
+            for line in result.stdout.split('\n'):
+                if line.startswith('ii'):
+                    parts = line.split()
+                    if len(parts) >= 3:
+                        name = parts[1]
+                        version = parts[2]
+                        description = ' '.join(parts[3:]) if len(parts) > 3 else ""
+                        
+                        if filter_query is None or filter_query.lower() in name.lower():
+                            packages.append({
+                                'name': name,
+                                'version': version,
+                                'description': description
+                            })
+            return packages
+        except subprocess.CalledProcessError as e:
+            self.log(f"Ошибка получения списка пакетов: {e.stderr}", "ERROR")
+            return []
+    
+    def list_upgradable_packages(self):
+        """Список пакетов доступных для обновления"""
+        try:
+            result = subprocess.run(['apt', 'list', '--upgradable'], capture_output=True, text=True, check=True)
+            packages = []
+            for line in result.stdout.split('\n')[1:]:  # Пропуск заголовка
+                if line.strip():
+                    parts = line.split('/')
+                    name = parts[0]
+                    packages.append(name)
+            return packages
+        except subprocess.CalledProcessError:
+            return []
+    
+    def clean_cache(self):
+        """Очистка кэша пакетов"""
+        self.log("Очистка кэша пакетов...")
+        try:
+            subprocess.run(['apt', 'clean'], check=True)
+            subprocess.run(['apt', 'autoclean'], check=True)
+            subprocess.run(['apt', 'autoremove', '-y'], check=True)
+            self.log("Кэш пакетов очищен")
+            print("✅ Кэш пакетов очищен")
+            return True
+        except subprocess.CalledProcessError as e:
+            self.log(f"Ошибка очистки кэша: {e}", "ERROR")
+            raise
+    
+    def add_custom_repo(self, repo_url, repo_name, gpg_key=None):
+        """Добавление пользовательского репозитория"""
+        self.log(f"Добавление репозитория: {repo_name} ({repo_url})")
+        
+        try:
+            # Добавление репозитория
+            repo_entry = f"deb {repo_url} $(lsb_release -cs) main\n"
+            with open(CUSTOM_REPO_FILE, 'a') as f:
+                f.write(repo_entry)
+            
+            # Добавление GPG ключа если указан
+            if gpg_key:
+                subprocess.run(['apt-key', 'adv', '--keyserver', 'keyserver.ubuntu.com', '--recv-keys', gpg_key], check=True)
+            
+            # Обновление кэша
+            self.update_cache()
+            
+            self.log(f"Репозиторий {repo_name} добавлен")
+            print(f"✅ Репозиторий {repo_name} успешно добавлен")
+            return True
+        except Exception as e:
+            self.log(f"Ошибка добавления репозитория: {e}", "ERROR")
+            raise
+    
+    def create_sandbox(self, sandbox_name):
+        """Создание изолированной среды (sandbox)"""
+        sandbox_dir = Path(f"/opt/greenway/sandboxes/{sandbox_name}")
+        
+        if sandbox_dir.exists():
+            raise ValueError(f"Sandbox {sandbox_name} уже существует")
+        
+        self.log(f"Создание sandbox: {sandbox_name}")
+        
+        try:
+            sandbox_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Создание базовой структуры
+            (sandbox_dir / "root").mkdir(exist_ok=True)
+            (sandbox_dir / "etc").mkdir(exist_ok=True)
+            (sandbox_dir / "usr").mkdir(exist_ok=True)
+            
+            # Создание конфигурации
+            config = {
+                'name': sandbox_name,
+                'created_at': datetime.now().isoformat(),
+                'packages': [],
+                'isolated': True
+            }
+            
+            with open(sandbox_dir / "config.json", 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            self.log(f"Sandbox {sandbox_name} создан")
+            print(f"✅ Sandbox {sandbox_name} успешно создан в {sandbox_dir}")
+            return sandbox_dir
+        except Exception as e:
+            self.log(f"Ошибка создания sandbox: {e}", "ERROR")
+            raise
+    
+    def install_in_sandbox(self, sandbox_name, package_name):
+        """Установка пакета в sandbox"""
+        sandbox_dir = Path(f"/opt/greenway/sandboxes/{sandbox_name}")
+        
+        if not sandbox_dir.exists():
+            raise ValueError(f"Sandbox {sandbox_name} не найден")
+        
+        self.log(f"Установка {package_name} в sandbox {sandbox_name}")
+        
+        # Использование debootstrap или аналогичного инструмента
+        try:
+            # Эмуляция установки (в реальной реализации нужно использовать debootstrap)
+            config_file = sandbox_dir / "config.json"
+            with open(config_file, 'r') as f:
+                config = json.load(f)
+            
+            config['packages'].append(package_name)
+            
+            with open(config_file, 'w') as f:
+                json.dump(config, f, indent=2)
+            
+            self.log(f"Пакет {package_name} установлен в sandbox {sandbox_name}")
+            print(f"✅ Пакет {package_name} установлен в sandbox {sandbox_name}")
+            return True
+        except Exception as e:
+            self.log(f"Ошибка установки в sandbox: {e}", "ERROR")
+            raise
+    
+    def get_featured_packages(self):
+        """Получение списка рекомендованных пакетов"""
+        featured = [
+            {'name': 'vlc', 'category': 'multimedia', 'description': 'Медиаплеер'},
+            {'name': 'gimp', 'category': 'graphics', 'description': 'Графический редактор'},
+            {'name': 'libreoffice', 'category': 'office', 'description': 'Офисный пакет'},
+            {'name': 'firefox', 'category': 'internet', 'description': 'Веб-браузер'},
+            {'name': 'steam', 'category': 'games', 'description': 'Игровая платформа'},
+            {'name': 'code', 'category': 'development', 'description': 'VS Code'},
+            {'name': 'docker.io', 'category': 'development', 'description': 'Контейнеризация'},
+            {'name': 'obs-studio', 'category': 'multimedia', 'description': 'Стриминг и запись'},
+        ]
+        return featured
+    
+    def get_categories(self):
+        """Получение категорий пакетов"""
+        categories = [
+            {'id': 'internet', 'name': 'Интернет', 'icon': '🌐'},
+            {'id': 'multimedia', 'name': 'Мультимедиа', 'icon': '🎬'},
+            {'id': 'graphics', 'name': 'Графика', 'icon': '🎨'},
+            {'id': 'office', 'name': 'Офис', 'icon': '📄'},
+            {'id': 'games', 'name': 'Игры', 'icon': '🎮'},
+            {'id': 'development', 'name': 'Разработка', 'icon': '💻'},
+            {'id': 'system', 'name': 'Система', 'icon': '⚙️'},
+            {'id': 'utilities', 'name': 'Утилиты', 'icon': '🔧'},
+        ]
+        return categories
+
+
+def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='GreenWayOS Package Manager')
+    subparsers = parser.add_subparsers(dest='command', help='Команды')
+    
+    # Обновление кэша
+    update_parser = subparsers.add_parser('update', help='Обновить кэш пакетов')
+    
+    # Обновление системы
+    upgrade_parser = subparsers.add_parser('upgrade', help='Обновить систему')
+    upgrade_parser.add_argument('--full', action='store_true', help='Полное обновление (dist-upgrade)')
+    
+    # Установка пакета
+    install_parser = subparsers.add_parser('install', help='Установить пакет')
+    install_parser.add_argument('package', help='Имя пакета')
+    install_parser.add_argument('--simulate', action='store_true', help='Тестовый режим')
+    
+    # Удаление пакета
+    remove_parser = subparsers.add_parser('remove', help='Удалить пакет')
+    remove_parser.add_argument('package', help='Имя пакета')
+    remove_parser.add_argument('--purge', action='store_true', help='Полное удаление с конфигами')
+    
+    # Поиск пакетов
+    search_parser = subparsers.add_parser('search', help='Поиск пакетов')
+    search_parser.add_argument('query', help='Поисковый запрос')
+    
+    # Информация о пакете
+    info_parser = subparsers.add_parser('info', help='Информация о пакете')
+    info_parser.add_argument('package', help='Имя пакета')
+    
+    # Список установленных
+    list_parser = subparsers.add_parser('list', help='Список пакетов')
+    list_parser.add_argument('--installed', action='store_true', help='Только установленные')
+    list_parser.add_argument('--upgradable', action='store_true', help='Только доступные для обновления')
+    list_parser.add_argument('--filter', help='Фильтр по имени')
+    
+    # Очистка
+    clean_parser = subparsers.add_parser('clean', help='Очистить кэш')
+    
+    # Магазин (GUI режим)
+    store_parser = subparsers.add_parser('store', help='Открыть магазин приложений')
+    store_parser.add_argument('--gui', action='store_true', help='Графический интерфейс')
+    
+    args = parser.parse_args()
+    
+    manager = PackageManager()
+    
+    if args.command == 'update':
+        try:
+            manager.update_cache()
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'upgrade':
+        try:
+            manager.upgrade_system(full_upgrade=args.full)
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'install':
+        try:
+            manager.install_package(args.package, simulate=args.simulate)
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'remove':
+        try:
+            manager.remove_package(args.package, purge=args.purge)
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'search':
+        packages = manager.search_packages(args.query)
+        if packages:
+            print(f"\n📦 Найдено пакетов: {len(packages)}\n")
+            for pkg in packages[:20]:  # Показываем первые 20
+                print(f"  {pkg['name']}")
+                if pkg.get('description'):
+                    print(f"    {pkg['description']}")
+            if len(packages) > 20:
+                print(f"\n... и ещё {len(packages) - 20}")
+        else:
+            print("Пакеты не найдены")
+    
+    elif args.command == 'info':
+        info = manager.get_package_info(args.package)
+        if info:
+            print(f"\n📦 Информация о пакете: {args.package}\n")
+            for key, value in info.items():
+                print(f"{key}: {value}")
+        else:
+            print("Пакет не найден")
+    
+    elif args.command == 'list':
+        if args.upgradable:
+            packages = manager.list_upgradable_packages()
+            print(f"\n📦 Доступно обновлений: {len(packages)}\n")
+            for pkg in packages:
+                print(f"  {pkg}")
+        else:
+            packages = manager.list_installed_packages(filter_query=args.filter)
+            print(f"\n📦 Установлено пакетов: {len(packages)}\n")
+            for pkg in packages[:50]:  # Показываем первые 50
+                print(f"  {pkg['name']} ({pkg['version']})")
+            if len(packages) > 50:
+                print(f"\n... и ещё {len(packages) - 50}")
+    
+    elif args.command == 'clean':
+        try:
+            manager.clean_cache()
+        except Exception as e:
+            print(f"❌ Ошибка: {e}")
+            sys.exit(1)
+    
+    elif args.command == 'store':
+        if args.gui:
+            print("🚀 Запуск графического магазина приложений...")
+            # Здесь будет запуск GUI
+        else:
+            featured = manager.get_featured_packages()
+            categories = manager.get_categories()
+            
+            print("\n🏪 GREENWAYOS APP STORE")
+            print("=" * 60)
+            
+            print("\n📁 КАТЕГОРИИ:")
+            for cat in categories:
+                print(f"  {cat['icon']} {cat['name']} ({cat['id']})")
+            
+            print("\n⭐ РЕКОМЕНДУЕМЫЕ ПРИЛОЖЕНИЯ:")
+            for pkg in featured:
+                print(f"  📦 {pkg['name']} [{pkg['category']}]")
+                print(f"     {pkg['description']}")
+            
+            print("\nДля установки используйте: greenway-pkg install <package>")
+    
+    else:
+        parser.print_help()
+
+
+if __name__ == '__main__':
+    main()

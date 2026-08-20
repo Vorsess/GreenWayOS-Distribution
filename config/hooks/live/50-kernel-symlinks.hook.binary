@@ -1,0 +1,89 @@
+#!/bin/bash
+# Binary-stage hook (runs in the live-build binary tree, not inside chroot).
+# Debian Live: place under config/hooks/live for live images (not config/hooks/normal).
+#
+# Ensures ISO paths used by GRUB exist as stable names:
+#   live/vmlinuz
+#   live/initrd.img
+# by renaming the latest vmlinuz-* / initrd.img-* and removing older versioned copies.
+
+set -euo pipefail
+
+echo "P: [kernel] Normalizing live kernel filenames (no version suffixes)..."
+
+resolve_live_dir() {
+	if [ -d "./live" ]; then
+		printf '%s\n' "$(pwd)/live"
+		return 0
+	fi
+	if [ -n "${LB_BUILD_DIR:-}" ] && [ -d "${LB_BUILD_DIR}/binary/live" ]; then
+		printf '%s\n' "${LB_BUILD_DIR}/binary/live"
+		return 0
+	fi
+	echo "P: [kernel] ERROR: cannot find ./live (cwd: $(pwd))" >&2
+	echo "P: [kernel] LB_BUILD_DIR=${LB_BUILD_DIR:-<unset>}" >&2
+	return 1
+}
+
+LIVE_DIR="$(resolve_live_dir)" || exit 1
+cd "${LIVE_DIR}"
+
+echo "P: [kernel] Using LIVE_DIR=${LIVE_DIR}"
+
+shopt -s nullglob
+
+have_versioned=false
+for _ in vmlinuz-*; do
+	have_versioned=true
+	break
+done
+have_initrd_versioned=false
+for _ in initrd.img-*; do
+	have_initrd_versioned=true
+	break
+done
+
+if [ "${have_versioned}" = false ] && [ "${have_initrd_versioned}" = false ]; then
+	if [ -f "./vmlinuz" ] && [ -f "./initrd.img" ]; then
+		echo "P: [kernel] Stable names already present; nothing to do."
+		ls -lh ./vmlinuz ./initrd.img
+		exit 0
+	fi
+fi
+
+latest_vmlinuz="$(ls -1 vmlinuz-* 2>/dev/null | sort -V | tail -1 || true)"
+latest_initrd="$(ls -1 initrd.img-* 2>/dev/null | sort -V | tail -1 || true)"
+
+if [ -z "${latest_vmlinuz}" ] || [ ! -f "${latest_vmlinuz}" ]; then
+	echo "P: [kernel] ERROR: no vmlinuz-* file under ${LIVE_DIR}" >&2
+	ls -la >&2 || true
+	exit 1
+fi
+
+if [ -z "${latest_initrd}" ] || [ ! -f "${latest_initrd}" ]; then
+	echo "P: [kernel] ERROR: no initrd.img-* file under ${LIVE_DIR}" >&2
+	ls -la >&2 || true
+	exit 1
+fi
+
+echo "P: [kernel] Selected kernel: ${latest_vmlinuz}"
+echo "P: [kernel] Selected initrd: ${latest_initrd}"
+
+# Remove other kernel/initrd variants (only one payload in /live for stable boot paths)
+for f in vmlinuz-*; do
+	[ "${f}" = "${latest_vmlinuz}" ] || rm -f -- "${f}"
+done
+for f in initrd.img-*; do
+	[ "${f}" = "${latest_initrd}" ] || rm -f -- "${f}"
+done
+
+rm -f -- vmlinuz initrd.img
+
+mv -- "${latest_vmlinuz}" vmlinuz
+mv -- "${latest_initrd}" initrd.img
+chmod 644 -- vmlinuz initrd.img
+
+echo "P: [kernel] Result:"
+ls -lh -- vmlinuz initrd.img
+
+echo "P: [kernel] Done."
